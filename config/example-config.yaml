@@ -1,0 +1,101 @@
+# GPU Lens — Example Configuration
+# Copy this file to config/config.yaml when customizing thresholds or enabling read-only live adapters.
+# By default, GPU Lens runs in 100% offline fixture mode ("mode: fixture") and requires zero credentials.
+
+listen_addr: ":8080"
+sqlite_path: "gpulens.db"
+retention_days: 14
+static_dir: "web/dist"
+
+source:
+  # "fixture" (default offline demo) or "live" (read-only Prometheus + Kubernetes adapters)
+  mode: "fixture"
+  default_scenario_id: "scenario-5-correlated-failure"
+  fixtures_dir: "fixtures"
+  http_timeout: "10s"
+  max_response_bytes: 16777216 # 16 MiB cap on external API responses
+
+  # Optional Read-Only Prometheus HTTP API v1 Integration
+  prometheus_enabled: false
+  prometheus_endpoint: "http://prometheus-k8s.monitoring.svc:9090"
+  # Supply token via environment variable GPULENS_PROMETHEUS_TOKEN in production; never commit secrets.
+  prometheus_bearer_token: ""
+
+  # Optional Direct DCGM Exporter Scrape Integration
+  dcgm_exporter_enabled: false
+  dcgm_exporter_endpoint: "http://localhost:9400/metrics"
+
+  # Optional Read-Only Kubernetes API Integration (GET/LIST on nodes, pods, events only)
+  kubernetes_enabled: false
+  kubernetes_api_server: "https://kubernetes.default.svc:443"
+  kubernetes_bearer_token: ""
+
+thresholds:
+  # Rule 1: GPU-SCHED-001 (Pending GPU Workload Scheduling Bottleneck)
+  pending_grace_seconds: 60
+  critical_pending_minutes: 30.0
+
+  # Rule 2: GPU-HEALTH-002 (GPU Hardware Fault or Health Degradation)
+  xid_error_threshold: 1
+  ecc_dbe_threshold: 1
+  row_remap_failure_threshold: 1
+  pcie_replay_warning_count: 10
+  nvlink_crc_error_threshold: 1
+
+  # Rule 3: GPU-UTIL-003 (Persistently Low Compute Utilization)
+  low_util_threshold_percent: 15.0
+  low_util_window_minutes: 60.0
+  min_utilization_samples: 6
+  high_vram_context_percent: 50.0
+
+  # Rule 4: GPU-CORR-004 (Workload Failure Correlation Window)
+  correlation_lead_minutes: 15.0
+  correlation_lag_minutes: 5.0
+
+  # Rule 5: GPU-FRESH-005 (Monitoring Data Freshness)
+  max_staleness_seconds: 180.0
+
+  # Rule 6: GPU-THERM-006 (Thermal, Power, and Memory Pressure)
+  temp_warning_celsius: 80.0
+  temp_critical_celsius: 87.0
+  mem_temp_warning_celsius: 90.0
+  fb_memory_warning_percent: 95.0
+  power_cap_warning_percent: 98.0
+
+  # Optional illustrative GPU-hour rate ($/GPU-hr) for low-utilization capacity reports.
+  # Explicitly labeled as a sample estimate, NEVER actual expenditure or realized savings.
+  # Set to 0 or null to disable sample cost estimates entirely.
+  optional_sample_gpu_hourly_rate_usd: 3.50
+
+metric_mappings:
+  # Default DCGM Exporter fields (enabled in shipped default collector CSV)
+  gpu_util_metric: "DCGM_FI_DEV_GPU_UTIL"
+  mem_copy_util_metric: "DCGM_FI_DEV_MEM_COPY_UTIL"
+  fb_used_metric: "DCGM_FI_DEV_FB_USED"
+  fb_free_metric: "DCGM_FI_DEV_FB_FREE"
+  gpu_temp_metric: "DCGM_FI_DEV_GPU_TEMP"
+  memory_temp_metric: "DCGM_FI_DEV_MEMORY_TEMP"
+  power_usage_metric: "DCGM_FI_DEV_POWER_USAGE"
+  xid_errors_metric: "DCGM_FI_DEV_XID_ERRORS"
+  pcie_replay_metric: "DCGM_FI_DEV_PCIE_REPLAY_COUNTER"
+  row_remap_failure_metric: "DCGM_FI_DEV_ROW_REMAP_FAILURE"
+  uncorrectable_remap_metric: "DCGM_FI_DEV_UNCORRECTABLE_REMAPPED_ROWS"
+
+  # Optional DCGM Exporter fields (evaluated only when exported by collector CSV)
+  ecc_dbe_vol_total_metric: "DCGM_FI_DEV_ECC_DBE_VOL_TOTAL"
+  ecc_sbe_vol_total_metric: "DCGM_FI_DEV_ECC_SBE_VOL_TOTAL"
+  nvlink_crc_flit_error_metric: "DCGM_FI_DEV_NVLINK_CRC_FLIT_ERROR_COUNT_TOTAL"
+  nvlink_replay_error_metric: "DCGM_FI_DEV_NVLINK_REPLAY_ERROR_COUNT_TOTAL"
+  thermal_violation_metric: "DCGM_FI_DEV_THERMAL_VIOLATION"
+  power_violation_metric: "DCGM_FI_DEV_POWER_VIOLATION"
+  exporter_health_status_metric: "DCGM_EXP_GPU_HEALTH_STATUS"
+  clock_events_count_metric: "DCGM_EXP_CLOCK_EVENTS_COUNT"
+
+  # Label resolution candidates (supports standard and --use-old-namespace conventions)
+  uuid_label_candidates: ["UUID", "uuid"]
+  gpu_index_label: "gpu"
+  node_name_label_candidates: ["Hostname", "hostname", "node", "kubernetes_node"]
+  model_name_label_candidates: ["modelName", "model_name"]
+  pod_name_label_candidates: ["pod", "pod_name"]
+  namespace_label_candidates: ["namespace", "pod_namespace"]
+  container_label_candidates: ["container", "container_name"]
