@@ -1,0 +1,27 @@
+version: "3.9"
+
+services:
+  gpu-lens:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: gpu-lens-demo
+    ports:
+      - "8080:8080"
+    environment:
+      - GPULENS_LISTEN_ADDR=:8080
+      - GPULENS_DEFAULT_SCENARIO=scenario-5-correlated-failure
+      - GPULENS_FIXTURES_DIR=/app/fixtures
+    volumes:
+      - gpulens_data:/app/data
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+
+volumes:
+  gpulens_data:
