@@ -1,0 +1,49 @@
+name: GPU Lens CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  backend-and-verification:
+    name: Go Backend, Rules Engine & Offline Verification
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go 1.22
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Check Go formatting (gofmt)
+        run: |
+          test -z "$(gofmt -l cmd/ internal/)"
+
+      - name: Run go vet
+        run: go vet ./...
+
+      - name: Generate deterministic fixtures
+        run: python3 scripts/generate_fixtures.py
+
+      - name: Run Go unit and integration tests
+        run: go test -v -race ./...
+
+      - name: Build Go binary
+        run: go build -v -o bin/gpulens ./cmd/gpulens
+
+      - name: Run end-to-end verification suite
+        run: python3 scripts/run_verification_suite.py
