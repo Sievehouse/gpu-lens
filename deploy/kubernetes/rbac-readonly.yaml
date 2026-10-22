@@ -1,0 +1,48 @@
+# Minimum Read-Only Kubernetes RBAC Manifest for GPU Lens
+# Grants strictly read-only verbs (get, list, watch) on nodes, pods, and events.
+# Zero access to secrets, configmaps, pods/exec, pods/log, or mutating verbs.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: gpu-lens
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: gpulens-reader
+  namespace: gpu-lens
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: gpulens-readonly-clusterrole
+rules:
+  - apiGroups: [""]
+    resources:
+      - nodes
+      - pods
+      - events
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups: ["events.k8s.io"]
+    resources:
+      - events
+    verbs:
+      - get
+      - list
+      - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: gpulens-readonly-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: gpulens-readonly-clusterrole
+subjects:
+  - kind: ServiceAccount
+    name: gpulens-reader
+    namespace: gpu-lens
