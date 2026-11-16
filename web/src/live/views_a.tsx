@@ -17,7 +17,7 @@ export function verdictClass(v: string): string {
   return v === 'ready' ? 'healthy' : v === 'degraded' ? 'warning' : v === 'blocked' ? 'critical' : 'inconclusive';
 }
 
-export function renderCommandCenter(L: LiveStore, s: LiveState, go: (tab: string) => void) {
+export function renderCommandCenter(L: LiveStore, s: LiveState, go: (tab: string) => void, openSimulation?: () => void) {
   const ov = s.overview;
   const pts = L.history;
   const times = pts.map((p) => p.t);
@@ -37,8 +37,35 @@ export function renderCommandCenter(L: LiveStore, s: LiveState, go: (tab: string
   const havePower = gpus.some((g) => g.latest.power_usage_watts !== null);
   const incidents = ov?.active_incidents || [];
 
+  const welcome = gpus.length === 0 && s.status.tick > 0 && (
+    <div className="panel lv-welcome">
+      <div className="panel-title">Nothing to monitor on this machine yet</div>
+      <p className="lv-welcome-lead">
+        GPU Lens checked every source and found no GPU. That is reported honestly as <b>no telemetry</b>, never as healthy. Pick a way forward:
+      </p>
+      <div className="lv-welcome-grid">
+        <div className="lv-welcome-card">
+          <b>Look around first</b>
+          <span>Open the simulation: six deterministic cluster scenarios with full incident evidence. No GPU needed.</span>
+          {openSimulation && <button className="btn btn-primary" onClick={openSimulation}>Open the simulation →</button>}
+        </div>
+        <div className="lv-welcome-card">
+          <b>Try Go Live without hardware</b>
+          <span>Run <span className="mono">python scripts/live_lab.py</span> next to GPU Lens: a clearly-labelled synthetic 8-GPU cluster appears here within seconds.</span>
+          <button className="btn" onClick={() => go('preflight')}>See what was checked</button>
+        </div>
+        <div className="lv-welcome-card">
+          <b>Connect real GPUs</b>
+          <span>Run GPU Lens on a machine with an NVIDIA driver, or point it at a DCGM exporter, Prometheus or Kubernetes API.</span>
+          <button className="btn" onClick={() => go('connections')}>Open Connections</button>
+        </div>
+      </div>
+    </div>
+  );
+
   return (
     <div>
+      {welcome}
       <div className="lv-stat-grid">
         <Stat label="GPUs monitored" value={gpus.length} sub={`${fresh} fresh · ${gpus.length - fresh} stale`} kind={gpus.length - fresh > 0 ? 'warning' : ''} />
         <Stat label="Fleet utilization" value={num(latest?.util, 1, '%')} sub="mean GPU SM util" />
