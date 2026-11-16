@@ -146,3 +146,34 @@ Every entity in `ClusterSnapshot` uses explicit keys so correlation across layer
 - **Context**: GPU Lens is architected in Go (`cmd/gpulens`, `internal/...`) with a React + TypeScript frontend (`web/`). Engineers reviewing or running the project in restricted CI/sandbox environments without an installed Go compiler or live GPU cluster still need to run the full test suite, build the TypeScript UI, start the server, and inspect live scenarios.
 - **Decision**: Keep the Go backend free of heavy CGo or external router dependencies so `go test ./...` and `go build ./cmd/gpulens` compile cleanly with standard Go, and provide a 1:1 local runtime & verification suite (`scripts/local_runtime_server.py` and `scripts/run_verification_suite.py`) that consumes the exact same `fixtures/*.json`, `config/*.yaml`, SQLite schema, and compiled `web/dist/` bundle when `go` is absent on the host.
 - **Consequences**: Guarantees 100% offline reproducibility across both standard Go development workstations/Docker environments and air-gapped sandbox VMs.
+
+---
+
+## 5. Go Live: live telemetry engine
+
+Go Live adds a second, isolated path next to the fixture demo. The demo (`/api/v1/overview`, `/incidents`, …) is untouched; everything live sits behind `/api/v1/live/*` and the Part 2 UI.
+
+```text
+ nvidia-smi ─┐                                                    ┌─ /api/v1/live/state ─► LiveConsole (web/src/live)
+ host /proc ─┤  per-source goroutine/thread   ┌── merge by GPU UUID ┤
+ DCGM /metrics ─┤  (parallel, own cadence,    │   nodes + pods      │
+ Prometheus ─┤   latency + failure tracking) ─┤   windowed rules    │
+ Kubernetes ─┘                                 └── lifecycle ────────┘
+                                                   (open → tracked → resolved), history ring, activity log, preflight
+```
+
+- **`internal/live`** — `collect.go` (source scheduling and state machine: pending → connected / degraded / unreachable / not_found / disabled / error), `merge.go` (per-UUID observation merge, inferred nodes and host-process pods, windowed low-utilisation input), `lifecycle.go` (incident tracking, history, activity diffing), `preflight.go` (the checklist), `view.go` (payload). The rules and capacity calculator are the *same* `internal/rules` and `internal/capacity` code the demo uses; the engine only builds a `ClusterSnapshot` from live observations.
+- **Epistemics preserved.** A GPU with no fresh sample is stale and is excluded from health verdicts and raises `GPU-FRESH-005`. A metric absent from every source is "not exported", never `0`. The low-utilisation window is built from real observation time (`anchorWindow` pins its ends so the capacity calculator and the rule agree) so a freshly-seen workload is not accused of being idle for an hour.
+- **Isolation of the UI.** The launcher is plain DOM outside `#root`; live mode is `?view=live`; the root factory swaps `<App/>` and `<LiveConsole/>`. `App.tsx` only gained `export`s. A DOM-snapshot regression (125 states) against the original build proves Part 1 is unchanged.
+
+### Python runtime parity
+
+`scripts/gpulens_live.py` is a standard-library port of the engine, used by `scripts/local_runtime_server.py` when Go is not installed. It serves the same routes, guards and JSON shapes (verified by running `tests/live_blackbox.py` against both servers). Differences:
+
+| Area | Go | Python |
+| :-- | :-- | :-- |
+| Prometheus | instant query **and** `query_range` history backfill, scrape-target audit (`up`), clock-skew check | one instant query; those three checks report "Go-runtime feature" |
+| Rules / capacity | `internal/rules`, `internal/capacity` | the existing Python mirrors in `local_runtime_server.py` |
+| Concurrency | goroutines, context cancellation | one daemon thread per source call, generation counter to discard stale results |
+| Kubernetes read-only stats | counted by the transport guard | counted by the transport guard |
+
