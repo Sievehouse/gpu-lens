@@ -1,8 +1,8 @@
-// Switches between part 1 (simulated demo) and part 2 (Go Live). Part 1's DOM is never modified: the launcher
-// button is a separate element outside the app root.
+// Switches between Go Live (the default view) and the simulated demo (?view=demo). The simulation's DOM is never
+// modified: the launcher button is a separate element outside the app root.
 import { requestRender } from './jsx-runtime';
 
-let liveMode = false;
+let liveMode = true;
 
 export function isLive(): boolean {
   return liveMode;
@@ -11,9 +11,9 @@ export function isLive(): boolean {
 function syncUrl() {
   try {
     const u = new URL(window.location.href);
-    if (liveMode) u.searchParams.set('view', 'live');
+    if (liveMode) u.searchParams.delete('view');
     else {
-      u.searchParams.delete('view');
+      u.searchParams.set('view', 'demo');
       u.searchParams.delete('live_tab');
     }
     window.history.replaceState(null, '', u.toString());
@@ -34,9 +34,10 @@ export function setLive(on: boolean) {
 
 export function initMode() {
   try {
-    liveMode = new URLSearchParams(window.location.search).get('view') === 'live';
+    // Go Live opens first; ?view=demo opens the simulation. (Old ?view=live links keep working.)
+    liveMode = new URLSearchParams(window.location.search).get('view') !== 'demo';
   } catch {
-    liveMode = false;
+    liveMode = true;
   }
 }
 
@@ -47,7 +48,7 @@ export function mountLauncher() {
   btn.id = 'golive-launcher';
   btn.type = 'button';
   btn.className = 'golive-launcher';
-  btn.title = 'Switch from the simulated demo to live telemetry from this machine and your GPU infrastructure';
+  btn.title = 'Switch from the simulation to live telemetry from this machine and your GPU infrastructure';
   btn.innerHTML = '<span class="golive-dot"></span><span class="golive-text">Go Live</span>';
   btn.addEventListener('click', () => setLive(true));
   document.body.appendChild(btn);
