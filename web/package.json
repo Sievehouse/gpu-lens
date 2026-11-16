@@ -1,23 +1,15 @@
 {
   "name": "gpu-lens-web",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
-  "description": "GPU Lens Operator Console — React + TypeScript Frontend",
+  "description": "GPU Lens Operator Console — TypeScript + TSX on a small built-in JSX runtime (no framework dependency)",
   "scripts": {
-    "dev": "vite",
     "build": "node scripts/build_offline.js",
-    "build:vite": "tsc && vite build",
-    "typecheck": "node scripts/build_offline.js --verify-only"
-  },
-  "dependencies": {
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "dev": "node scripts/build_offline.js --watch",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "verify": "node scripts/build_offline.js --verify-only"
   },
   "devDependencies": {
-    "@types/react": "^18.3.3",
-    "@types/react-dom": "^18.3.0",
-    "@vitejs/plugin-react": "^4.3.1",
-    "typescript": "^5.5.3",
-    "vite": "^5.4.0"
+    "typescript": "^5.5.3"
   }
 }
