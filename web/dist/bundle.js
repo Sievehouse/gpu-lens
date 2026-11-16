@@ -2999,10 +2999,13 @@ const jsx_runtime_1 = require("./jsx-runtime");
 const App_1 = require("./App");
 const LiveConsole_1 = require("./live/LiveConsole");
 const mode_1 = require("./mode");
+const theme_1 = require("./theme");
 const rootEl = document.getElementById('root');
 if (rootEl) {
+    (0, theme_1.initTheme)();
     (0, mode_1.initMode)();
     (0, mode_1.mountLauncher)();
+    (0, theme_1.mountThemeToggle)();
     (0, jsx_runtime_1.mountApp)(() => ((0, mode_1.isLive)() ? (0, jsx_runtime_1.h)(LiveConsole_1.LiveConsole, { onExit: () => (0, mode_1.setLive)(false) }) : (0, jsx_runtime_1.h)(App_1.App, null)), rootEl);
 }
 
@@ -3068,6 +3071,62 @@ function mountLauncher() {
     btn.addEventListener('click', () => setLive(true));
     document.body.appendChild(btn);
     btn.style.display = liveMode ? 'none' : '';
+}
+
+  };
+  __modules["theme"] = function(module, exports, require) {
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.applyTheme = applyTheme;
+exports.currentTheme = currentTheme;
+exports.initTheme = initTheme;
+exports.mountThemeToggle = mountThemeToggle;
+const KEY = 'gpulens-theme';
+function read() {
+    try {
+        const v = window.localStorage.getItem(KEY);
+        if (v === 'dark' || v === 'light')
+            return v;
+    }
+    catch {
+        /* storage can be unavailable; fall through */
+    }
+    return 'light';
+}
+function applyTheme(t) {
+    document.documentElement.setAttribute('data-theme', t);
+    const btn = document.getElementById('theme-toggle');
+    if (btn) {
+        btn.textContent = t === 'light' ? '☾ Dark mode' : '☀ Light mode';
+        btn.setAttribute('aria-label', t === 'light' ? 'Switch to dark mode' : 'Switch to light mode');
+    }
+}
+function currentTheme() {
+    return document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
+}
+function initTheme() {
+    applyTheme(read());
+}
+/** A small fixed button, plain DOM outside the app root. */
+function mountThemeToggle() {
+    if (document.getElementById('theme-toggle'))
+        return;
+    const btn = document.createElement('button');
+    btn.id = 'theme-toggle';
+    btn.type = 'button';
+    btn.className = 'theme-toggle';
+    btn.addEventListener('click', () => {
+        const next = currentTheme() === 'light' ? 'dark' : 'light';
+        try {
+            window.localStorage.setItem(KEY, next);
+        }
+        catch {
+            /* ignore */
+        }
+        applyTheme(next);
+    });
+    document.body.appendChild(btn);
+    applyTheme(currentTheme());
 }
 
   };
