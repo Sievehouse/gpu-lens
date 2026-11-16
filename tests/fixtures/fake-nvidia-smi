@@ -1,0 +1,168 @@
+#!/bin/sh
+# Test double for `nvidia-smi` used by the GPU Lens test suites. It is NOT a GPU tool: it prints canned,
+# deterministic answers for the handful of read-only query invocations GPU Lens issues, so the local-driver
+# adapter can be exercised on machines without NVIDIA hardware.
+#
+# Knobs (environment):
+#   FAKE_SMI_MODE   ok | old | no-devices | driver-fail | hang        (default ok)
+#   FAKE_SMI_TEMP0  core temperature of GPU 0 in C                    (default 54)
+#   FAKE_SMI_UTIL0  utilization of GPU 0 in %                         (default 97)
+#   FAKE_SMI_UTIL1  utilization of GPU 1 in %                         (default 2)
+#   FAKE_SMI_PROCS  1 = report compute processes, 0 = none            (default 1)
+MODE="${FAKE_SMI_MODE:-ok}"
+TEMP0="${FAKE_SMI_TEMP0:-54}"
+UTIL0="${FAKE_SMI_UTIL0:-97}"
+UTIL1="${FAKE_SMI_UTIL1:-2}"
+PROCS="${FAKE_SMI_PROCS:-1}"
+
+case "$MODE" in
+  driver-fail)
+    echo "NVIDIA-SMI has failed because it couldn't communicate with the NVIDIA driver. Make sure that the latest NVIDIA driver is installed and running."
+    exit 9 ;;
+  hang)
+    sleep 60
+    exit 1 ;;
+esac
+
+value() { # $1 = gpu index, $2 = field
+  case "$2" in
+    index) echo "$1" ;;
+    uuid) if [ "$1" = 0 ]; then echo "GPU-0a1b2c3d-1111-2222-3333-444455556666"; else echo "GPU-9f8e7d6c-aaaa-bbbb-cccc-ddddeeeeffff"; fi ;;
+    pci.bus_id) if [ "$1" = 0 ]; then echo "00000000:01:00.0"; else echo "00000000:41:00.0"; fi ;;
+    driver_version) echo "550.90.07" ;;
+    temperature.gpu) if [ "$1" = 0 ]; then echo "$TEMP0"; else echo "38"; fi ;;
+    temperature.memory) echo "[N/A]" ;;
+    utilization.gpu) if [ "$1" = 0 ]; then echo "$UTIL0"; else echo "$UTIL1"; fi ;;
+    utilization.memory) if [ "$1" = 0 ]; then echo "41"; else echo "0"; fi ;;
+    memory.total) echo "24564" ;;
+    memory.used) if [ "$1" = 0 ]; then echo "21480"; else echo "18250"; fi ;;
+    memory.free) if [ "$1" = 0 ]; then echo "2822"; else echo "6052"; fi ;;
+    memory.reserved) echo "262" ;;
+    power.draw) if [ "$1" = 0 ]; then echo "318.42"; else echo "61.07"; fi ;;
+    power.limit) echo "450.00" ;;
+    fan.speed) if [ "$1" = 0 ]; then echo "67"; else echo "30"; fi ;;
+    pstate) if [ "$1" = 0 ]; then echo "P2"; else echo "P8"; fi ;;
+    ecc.errors.uncorrected.volatile.total|ecc.errors.corrected.volatile.total) echo "[N/A]" ;;
+    pcie.link.gen.current) echo "4" ;;
+    pcie.link.gen.max) echo "4" ;;
+    pcie.link.width.current) if [ "$1" = 0 ]; then echo "16"; else echo "8"; fi ;;
+    pcie.link.width.max) echo "16" ;;
+    clocks_throttle_reasons.sw_thermal_slowdown|clocks_event_reasons.sw_thermal_slowdown)
+      if [ "$1" = 0 ] && [ "$TEMP0" -ge 87 ]; then echo "Active"; else echo "Not Active"; fi ;;
+    clocks_throttle_reasons.*|clocks_event_reasons.*) echo "Not Active" ;;
+    name) if [ "$1" = 0 ]; then echo "NVIDIA GeForce RTX 4090"; else echo "NVIDIA RTX A5000, Rev. B"; fi ;;
+    *) echo "[N/A]" ;;
+  esac
+}
+
+known_field() {
+  case "$1" in
+    index|uuid|pci.bus_id|driver_version|temperature.gpu|utilization.gpu|utilization.memory|memory.total|memory.used|memory.free|power.draw|power.limit|fan.speed|name) return 0 ;;
+  esac
+  if [ "$MODE" = old ]; then return 1; fi
+  case "$1" in
+    temperature.memory|memory.reserved|pstate|ecc.errors.uncorrected.volatile.total|ecc.errors.corrected.volatile.total|pcie.link.gen.current|pcie.link.gen.max|pcie.link.width.current|pcie.link.width.max) return 0 ;;
+    clocks_throttle_reasons.hw_slowdown|clocks_throttle_reasons.hw_thermal_slowdown|clocks_throttle_reasons.hw_power_brake_slowdown|clocks_throttle_reasons.sw_thermal_slowdown|clocks_throttle_reasons.sw_power_cap) return 0 ;;
+  esac
+  return 1
+}
+
+case "$1" in
+  --help-query-gpu)
+    if [ "$MODE" = old ]; then
+      echo "Invalid combination of input arguments. Please run 'nvidia-smi -h' for help."
+      exit 1
+    fi
+    cat <<'HELP'
+List of valid properties to query for the switch "--query-gpu=":
+
+"timestamp"
+The timestamp of when the query was made in format "YYYY/MM/DD HH:MM:SS.msec".
+
+"driver_version"
+The version of the installed NVIDIA display driver. This is an alphanumeric string.
+
+"count"
+The number of NVIDIA GPUs in the system.
+
+"name" or "gpu_name"
+The official product name of the GPU. This is an alphanumeric string. For all products.
+
+"uuid" or "gpu_uuid"
+This value is the globally unique immutable alphanumeric identifier of the GPU.
+
+"pci.bus_id" or "gpu_bus_id"
+PCI bus id as "domain:bus:device.function", in hex.
+
+"index"
+Zero based index of the GPU. Can change at each boot.
+
+"fan.speed"
+The fan speed value is the percent of the product's maximum noise tolerance fan speed.
+
+"pstate"
+The current performance state for the GPU. States range from P0 (maximum performance) to P12 (minimum performance).
+
+"clocks_throttle_reasons.hw_slowdown"
+"clocks_throttle_reasons.hw_thermal_slowdown"
+"clocks_throttle_reasons.hw_power_brake_slowdown"
+"clocks_throttle_reasons.sw_thermal_slowdown"
+"clocks_throttle_reasons.sw_power_cap"
+
+"memory.total"
+"memory.reserved"
+"memory.used"
+"memory.free"
+
+"utilization.gpu"
+"utilization.memory"
+
+"ecc.errors.corrected.volatile.total"
+"ecc.errors.uncorrected.volatile.total"
+
+"temperature.gpu"
+"temperature.memory"
+
+"power.draw"
+"power.limit"
+
+"pcie.link.gen.current"
+"pcie.link.gen.max"
+"pcie.link.width.current"
+"pcie.link.width.max"
+HELP
+    exit 0 ;;
+  --query-gpu=*)
+    [ "$2" = "--format=csv,noheader,nounits" ] || { echo "unexpected format: $2"; exit 2; }
+    if [ "$MODE" = no-devices ]; then echo "No devices were found"; exit 6; fi
+    fields=$(echo "${1#--query-gpu=}" | tr ',' ' ')
+    for f in $fields; do
+      if ! known_field "$f"; then
+        echo "Field \"$f\" is not a valid field to query."
+        exit 2
+      fi
+    done
+    for gpu in 0 1; do
+      line=""
+      for f in $fields; do
+        v=$(value "$gpu" "$f")
+        if [ -z "$line" ]; then line="$v"; else line="$line, $v"; fi
+      done
+      echo "$line"
+    done
+    exit 0 ;;
+  --query-compute-apps=*)
+    [ "$2" = "--format=csv,noheader,nounits" ] || exit 2
+    if [ "$PROCS" = 1 ] && [ "$MODE" != no-devices ]; then
+      echo "GPU-0a1b2c3d-1111-2222-3333-444455556666, 4242, 20480, /usr/bin/python3"
+      echo "GPU-0a1b2c3d-1111-2222-3333-444455556666, 4310, 512, /opt/conda/bin/tensorboard"
+      echo "GPU-9f8e7d6c-aaaa-bbbb-cccc-ddddeeeeffff, 5150, 18100, jupyter-lab"
+    fi
+    exit 0 ;;
+  --query-remapped-rows=*)
+    echo "Field \"remapped_rows.failure\" is not a valid field to query."
+    exit 2 ;;
+  *)
+    echo "fake nvidia-smi: unsupported invocation: $*" >&2
+    exit 3 ;;
+esac
