@@ -36,12 +36,12 @@ func TestAPIEndpointsEndToEnd(t *testing.T) {
 		},
 		GPUs: []domain.GPUDevice{
 			{
-				UUID:        "GPU-TEST-01",
-				DeviceIndex: 0,
-				NodeName:    "gpu-node-01",
-				ModelName:   "NVIDIA H100",
+				UUID:         "GPU-TEST-01",
+				DeviceIndex:  0,
+				NodeName:     "gpu-node-01",
+				ModelName:    "NVIDIA H100",
 				LastSampleAt: baseTime,
-				Latest:      domain.GPUMetricPoint{Timestamp: baseTime, XIDErrorCode: 79, GPUTempCelsius: 72},
+				Latest:       domain.GPUMetricPoint{Timestamp: baseTime, XIDErrorCode: 79, GPUTempCelsius: 72},
 			},
 		},
 	}
