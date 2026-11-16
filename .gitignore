@@ -1,0 +1,8 @@
+web/node_modules/
+__pycache__/
+*.pyc
+bin/
+gpulens.db
+gpulens-state.json
+*.log
+.DS_Store
