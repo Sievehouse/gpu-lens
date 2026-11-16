@@ -1,26 +1,143 @@
 # GPU Lens — Open-Source GPU Fleet Reliability and Capacity Intelligence Platform
 
-**GPU Lens** is a self-hosted, strictly read-only diagnostic and capacity intelligence layer for Kubernetes clusters operating NVIDIA data center GPUs. It correlates existing infrastructure signals—DCGM Exporter / Prometheus GPU telemetry, Kubernetes `Node` capacity/allocatable states, `Pod` container lifecycles, and scheduler/node `Events`—into deterministic, evidence-backed incident reports and transparent capacity efficiency audits.
+[![Live demo](https://img.shields.io/badge/live%20demo-gpu--lens.onrender.com-0284c7)](https://gpu-lens.onrender.com)
+[![Sponsor](https://img.shields.io/badge/sponsor-%E2%9D%A4-db2777)](#-sponsor-this-project)
+[![Read-only by design](https://img.shields.io/badge/infrastructure-read--only-059669)](SECURITY.md)
+[![No AI APIs](https://img.shields.io/badge/AI%20APIs-none-64748b)](#6-non-negotiable-safety--architecture-constraints)
+
+**GPU Lens** is a self-hosted, strictly **read-only** console that tells you what your NVIDIA GPUs are doing *right now* and why something is wrong. It reads your GPUs through `nvidia-smi`, DCGM Exporter, Prometheus and the Kubernetes API, correlates the signals, and turns them into deterministic, evidence-backed incident reports and transparent capacity audits — no AI/LLM calls, no cluster changes, no guesswork.
+
+It has two views, one click apart:
+
+1. **Go Live** — the default. Real telemetry from this machine and your infrastructure, with a "check everything" preflight.
+2. **Simulation** — six deterministic cluster scenarios you can explore with no GPU and no setup.
+
+Try it: **<https://gpu-lens.onrender.com>** (the hosted copy has no GPUs, so Go Live honestly reports "no telemetry" there — use the **Simulation** button to explore, or run it on your own machine). The first load can take about a minute while the free host wakes up.
 
 ---
 
-## 0. Two parts, one console
+## 1. Go Live — real GPUs, checked end to end
 
-- **Part 1 — Simulated demo.** The original console with six deterministic scenarios. Works fully offline and is unchanged.
-- **Part 2 — Go Live.** Press the **Go Live** button and GPU Lens switches to real, read-only telemetry: it runs a preflight check of *every* source (local `nvidia-smi`, host vitals, DCGM exporter, Prometheus, Kubernetes API, cross-source correlation), then keeps collecting, merging and evaluating the same six rules live — with GPU cards, nodes & pods, incidents (with a resolved log), capacity, trend charts, host vitals, an activity log, live-editable thresholds, connection settings and JSON/CSV export. No GPU? `python3 scripts/live_lab.py` serves a clearly-labelled synthetic cluster to try it against.
+![Go Live — command center](docs/screenshots/01-golive-command-center.png)
 
-Both parts use a clean **white** theme by default; the **Dark mode** button (bottom-left) switches to the original dark look and the choice is remembered in the browser.
+Press nothing: GPU Lens opens on Go Live and immediately checks every source in parallel, every cycle. It then keeps collecting, merges the signals per GPU, and runs the same six rules on live data.
 
-Full guide: [`docs/LIVE.md`](docs/LIVE.md).
+| You get | What it means |
+| :-- | :-- |
+| **Check Everything** preflight | Every layer graded pass / warn / fail with a plain-language reason and a hint on how to fix it: GPU Lens itself, host, local NVIDIA driver, DCGM, Prometheus, Kubernetes, and cross-source correlation |
+| **GPU cards** | Utilization, VRAM, temperature, power, fan, P-state, throttle reasons, PCIe link, sparklines, and the processes or pods using each GPU |
+| **Incidents with evidence** | Opened when a rule fires, tracked while it lasts, moved to a resolved log when it clears — never silently dropped |
+| **Capacity, workloads, nodes, events** | Allocatable vs used GPUs, Pending pods, node health, warning events |
+| **Trends** | Fleet utilization, VRAM, hottest GPU, power and open-incident history, per-GPU heat map |
+| **Rules & Thresholds** | Change any rule threshold live and watch verdicts re-evaluate (the simulation is unaffected) |
+| **Connections** | Point it at a DCGM exporter, Prometheus or Kubernetes API; tokens are write-only |
+| **Export** | JSON snapshot of everything on screen |
 
-![Go Live — command center](docs/screenshots/05-golive-command-center.png)
-![Go Live — check everything (preflight)](docs/screenshots/06-golive-check-everything.png)
+![Go Live — check everything](docs/screenshots/02-golive-check-everything.png)
 
-*Screenshots show Go Live connected to the synthetic Live Lab (hence the EMULATED DATA banner).*
+![Go Live — GPUs](docs/screenshots/03-golive-gpus.png)
+
+**Missing data is never healthy.** A machine with no reachable telemetry reports *no telemetry*, a stale GPU is excluded from verdicts and raises an incident, and a metric that is not exported is shown as *not exported* — never as zero. Data from the built-in Live Lab test cluster is always labelled **EMULATED**.
+
+Full guide, HTTP API and limits: [`docs/LIVE.md`](docs/LIVE.md).
 
 ---
 
-## 1. Problem Statement
+## 2. Simulation — six scenarios, zero setup
+
+Press **Open the simulation** (top right of Go Live) or open `/?view=demo`. Pick a scenario in the banner:
+
+| # | Scenario | What it shows |
+| :-- | :-- | :-- |
+| 1 | Healthy cluster | The baseline: fresh telemetry, nothing firing |
+| 2 | Pending GPU workloads | Capacity vs fragmentation vs `nodeSelector` mismatch |
+| 3 | Hardware health & thermal warning | XID 48, row-remap failure, NVLink CRC, node allocatable drop |
+| 4 | Persistently low utilization | Low SM use *with* VRAM residency shown as contradicting evidence |
+| 5 | Workload failure correlation | XID 79 crash vs a healthy-GPU OOMKilled crash |
+| 6 | Stale & uncorrelated telemetry | The blind-spot banner; missing data is never green |
+
+![Simulation — overview](docs/screenshots/05-simulation-overview.png)
+
+![Simulation — incident detail with supporting and contradicting evidence](docs/screenshots/06-simulation-incident-detail.png)
+
+![Simulation — capacity and utilization](docs/screenshots/07-simulation-capacity.png)
+
+---
+
+## 3. How to use GPU Lens
+
+Pick the line that matches what you want to do.
+
+### A. "I just want to look around" (nothing to install)
+Open **<https://gpu-lens.onrender.com>**, press **Open the simulation**, and walk through the six scenarios ([five-minute walkthrough](#9-five-minute-simulation-walkthrough)).
+
+### B. "I want to see Go Live working, but I have no GPU"
+You need Python 3.9+ only (the repo ships the compiled UI). Open two terminals in the repo folder:
+
+```bash
+# terminal 1 — a clearly-labelled SYNTHETIC 8-GPU cluster on the addresses GPU Lens probes by default
+python scripts/live_lab.py
+
+# terminal 2 — GPU Lens
+python scripts/local_runtime_server.py --host 127.0.0.1 --port 8080 --static-dir web/dist --fixtures-dir fixtures
+```
+
+Open <http://localhost:8080>. Within seconds you see 8 emulated GPUs and a 12-minute storyline of incidents (thermal excursion, Pending 4-GPU job, XID 79 + pod crash, stalled exporter). With Go installed, `make live-lab` and `make live` do the same.
+
+### C. "I have an NVIDIA GPU machine" (workstation, laptop, GPU server)
+1. Confirm the driver works: run `nvidia-smi`.
+2. Start GPU Lens on that machine (same command as terminal 2 above, without the Live Lab).
+3. Open <http://localhost:8080> — your real GPUs appear on their own. Use `ssh -L 8080:localhost:8080 you@server` to view a remote server from your laptop.
+
+`nvidia-smi` reports utilization, memory, temperature, power, fan, throttling, PCIe and per-process memory. It cannot report hardware-fault counters (Xid, NVLink, ECC violations), so GPU Lens tells you fault coverage is limited and suggests adding a DCGM exporter.
+
+### D. "I run a GPU cluster (Kubernetes, DCGM, Prometheus)"
+Give GPU Lens read-only access and point it at your sources — by flag, environment variable, or the **Connections** tab:
+
+```bash
+kubectl apply -f deploy/kubernetes/rbac-readonly.yaml          # get/list/watch on nodes, pods, events — nothing else
+gpulens -mode live \
+  -dcgm-url http://dcgm-exporter.gpu:9400/metrics \
+  -prometheus-url http://prometheus.monitoring:9090 \
+  -kubernetes-url https://kube-api:6443 -kubernetes-token-file /run/secrets/token -kubernetes-ca-file /run/secrets/ca.crt
+```
+
+Run inside the cluster under that service account and the Kubernetes API is detected automatically. `-mode live` starts collecting at boot, so it works as an always-on service with no browser attached.
+
+### E. "I want it in Docker"
+```bash
+docker compose up --build        # http://localhost:8080 (published on 127.0.0.1 only)
+```
+Set `GPULENS_DCGM_EXPORTER_URL`, `GPULENS_PROMETHEUS_URL`, `GPULENS_KUBERNETES_URL` (see the commented lines in `docker-compose.yml`) to connect it.
+
+### A typical session
+1. Open **Go Live → Check Everything**: is every source healthy? Fix anything red using its hint.
+2. **Command Center**: fleet verdict, hottest GPU, open incidents.
+3. **Incidents**: read the evidence (supporting *and* contradicting) before acting.
+4. **Capacity / Workloads**: who holds the GPUs, who is Pending and why.
+5. **Rules & Thresholds**: tune a limit for your fleet and watch the verdicts change.
+6. **Export JSON** to attach a snapshot to a ticket.
+
+Both views have a white theme by default; the **Dark mode** button (bottom-left) switches and the browser remembers your choice. All flags and variables: [`docs/LIVE.md`](docs/LIVE.md).
+
+---
+
+## <a id="-sponsor-this-project"></a>💖 Sponsor this project
+
+GPU Lens is free, open source and built on evenings and weekends. If it saved you an on-call page, a debugging afternoon, or a wasted GPU-hour, please consider supporting it — sponsorship pays for real-hardware test time, new telemetry adapters (AMD, MIG, DRA), and keeping the hosted demo online.
+
+[![Sponsor on GitHub](https://img.shields.io/badge/GitHub%20Sponsors-mohityadav8-db2777?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/mohityadav8)
+[![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-support-f59e0b?logo=buymeacoffee&logoColor=white)](https://buymeacoffee.com/ymohit7990c)
+
+Other ways to help, all free:
+- ⭐ **Star the repository** — it is how other GPU operators find it.
+- 🧪 **Test it on real hardware** and open an issue with a screenshot of the *Check Everything* tab — Go Live has been verified against emulators and test doubles, so real-world reports are gold.
+- 📣 **Share it** with whoever runs your GPUs.
+- 🛠 **Contribute**: new rules, adapters and docs are welcome via pull request.
+
+---
+
+## 4. Why GPU Lens exists (problem statement)
 
 Operators of GPU clouds, AI training clusters, and inference platforms collect telemetry across disconnected layers:
 1. **GPU Hardware Telemetry** (`dcgm-exporter` / Prometheus): SM compute utilization (`DCGM_FI_DEV_GPU_UTIL`), memory copy utilization (`DCGM_FI_DEV_MEM_COPY_UTIL`), framebuffer occupancy (`DCGM_FI_DEV_FB_USED`), temperature (`DCGM_FI_DEV_GPU_TEMP`), power (`DCGM_FI_DEV_POWER_USAGE`), XID hardware error codes (`DCGM_FI_DEV_XID_ERRORS`), HBM row-remap failures (`DCGM_FI_DEV_ROW_REMAP_FAILURE`), PCIe replay counters (`DCGM_FI_DEV_PCIE_REPLAY_COUNTER`), and optional ECC / NVLink / throttling counters.
@@ -32,23 +149,7 @@ When a distributed training job crashes, stalls in `Pending`, or holds expensive
 
 ---
 
-## 2. Live Application Screenshots (Captured from Running Offline Demo)
-
-### Overview — Workload Failure Correlation & Fleet Health
-
-
-### Incident Detail — Observed Facts, Supporting vs. Contradicting Evidence & Timeline
-
-
-### Capacity & Utilization — Historical Series, VRAM Context & Non-Waste Methodology
-
-
-### Stale & Uncorrelated Telemetry — Explicit Blind-Spot Detection
-
-
----
-
-## 3. Core Capabilities & Six Deterministic Diagnostic Rules
+## 5. Core Capabilities & Six Deterministic Diagnostic Rules
 
 See [`RULES.md`](RULES.md) for full rule specifications, thresholds, and suppression logic:
 
@@ -63,7 +164,7 @@ See [`RULES.md`](RULES.md) for full rule specifications, thresholds, and suppres
 
 ---
 
-## 4. Non-Negotiable Safety & Architecture Constraints
+## 6. Non-Negotiable Safety & Architecture Constraints
 
 - **Zero AI / LLM / External SaaS Dependencies**: No OpenAI, Anthropic, Gemini, MCP servers, vector databases, or external SaaS calls. In demo mode there are no network calls at all; in Go Live, GPU Lens contacts only the telemetry endpoints you point it at (or the conventional local addresses). All diagnostics are deterministic rules and statistical summaries.
 - **Strictly Read-Only Infrastructure Access**: Enforced at the Go interface level, HTTP transport level (`ReadOnlyRoundTripper` in `internal/source/readonly_transport.go` blocks `POST`, `PUT`, `PATCH`, `DELETE`), and Kubernetes RBAC level (`deploy/kubernetes/rbac-readonly.yaml`).
@@ -72,7 +173,7 @@ See [`RULES.md`](RULES.md) for full rule specifications, thresholds, and suppres
 
 ---
 
-## 5. Repository Structure
+## 7. Repository Structure
 
 ```text
 gpu-lens/
@@ -88,7 +189,8 @@ gpu-lens/
 │   └── api/                             # HTTP REST handlers, middleware & API integration tests
 ├── web/                                 # React + TypeScript + Vite operator console
 │   ├── src/                             # Typed TSX components (App.tsx, api.ts, types.ts, jsx-runtime.ts, styles.css)
-│   ├── src/live/                        # Part 2 console (LiveConsole, views, store, API client) — isolated from the demo
+│   ├── src/theme.ts                     # White/dark theme toggle (CSS-only; white by default)
+│   ├── src/live/                        # Go Live console (LiveConsole, views, store, API client) — isolated from the simulation
 │   ├── scripts/build_offline.js         # Offline TypeScript/TSX compiler using @babel/preset-typescript & preset-react
 │   └── dist/                            # Compiled production frontend assets served by the backend
 ├── fixtures/                            # 6 checked-in deterministic JSON cluster scenarios
@@ -100,6 +202,7 @@ gpu-lens/
 │   └── run_verification_suite.py        # End-to-end automated unit & HTTP API verification suite
 ├── tests/live_blackbox.py               # Black-box Go Live tests against the Go and Python servers
 ├── tests/fixtures/fake-nvidia-smi       # nvidia-smi test double (canned answers, not a GPU tool)
+├── .github/FUNDING.yml                  # Sponsor button (GitHub Sponsors, Buy Me a Coffee)
 ├── docs/LIVE.md                         # Go Live guide, API reference, honest limits
 ├── config/example-config.yaml           # Documented example configuration & metric mappings
 ├── deploy/kubernetes/rbac-readonly.yaml # Minimum read-only Kubernetes RBAC manifest
@@ -116,7 +219,7 @@ gpu-lens/
 
 ---
 
-## 6. Quickstart & Exact Run Commands
+## 8. Quickstart & Exact Run Commands
 
 ### Option A: Run Directly (Works Offline With or Without Go Installed)
 
@@ -139,10 +242,10 @@ go test -v -race ./...
 go run ./cmd/gpulens -listen :8080 -mode fixture -fixtures-dir ./fixtures -static-dir ./web/dist
 ```
 
-### Go Live (Part 2)
+### Go Live
 
 ```bash
-make demo                      # http://127.0.0.1:8080 — press the Go Live button (bottom right)
+make demo                      # http://127.0.0.1:8080 — opens on Go Live; the Simulation is one click away
 python3 scripts/live_lab.py    # optional: a synthetic GPU cluster to point Go Live at (no GPUs needed)
 make live                      # or start already collecting: go run ./cmd/gpulens -mode live
 make test-live                 # black-box tests of the live API on the Go and Python backends
@@ -159,9 +262,9 @@ docker compose up --build
 
 ---
 
-## 7. Five-Minute Demonstration Walkthrough
+## 9. Five-Minute Simulation Walkthrough
 
-Once the server is running on `http://localhost:8080`, use the **Active Scenario** selector in the top banner to walk through all six operational scenarios in five minutes:
+Once the server is running on `http://localhost:8080`, press **Open the simulation** (top right; or open `/?view=demo`), then use the **Active Scenario** selector in the top banner to walk through all six operational scenarios in five minutes:
 
 1. **Minute 1 — Baseline Healthy Fleet (`1. Healthy Cluster`)**:
    - Select **1. Healthy Cluster (No Active Incidents)**.
@@ -181,7 +284,7 @@ Once the server is running on `http://localhost:8080`, use the **Active Scenario
 
 ---
 
-## 8. What GPU Lens Does Not Yet Support (Known Limitations)
+## 10. What GPU Lens Does Not Yet Support (Known Limitations)
 
 0. **Go Live was built and tested without GPU hardware.** The `nvidia-smi` adapter ran against a test double, and the DCGM / Kubernetes adapters against the Live Lab emulator and Go `httptest` servers; Prometheus against `httptest` only. Expect a first-run shake-down on real hardware. The Python runtime reads Prometheus with a single instant query (no backfill, no target audit, no clock-skew check).
 
