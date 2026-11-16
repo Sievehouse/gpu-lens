@@ -81,7 +81,7 @@ export function LiveConsole(props: { onExit: () => void }) {
           </p>
           <div style={{ marginTop: '12px', display: 'flex', gap: '8px' }}>
             <button className="btn" onClick={() => store.refresh()}>Retry</button>
-            <button className="btn" onClick={props.onExit}>← Back to demo</button>
+            <button className="btn" onClick={props.onExit}>Open the simulation →</button>
           </div>
         </div>
       </div>
@@ -94,7 +94,7 @@ export function LiveConsole(props: { onExit: () => void }) {
         <div className="panel">
           <div className="panel-title">Go Live is switched off</div>
           <p style={{ color: 'var(--text-secondary)', marginTop: '8px' }}>{s.status.unsupported_reason || 'The live console is disabled in this build.'}</p>
-          <button className="btn" style={{ marginTop: '12px' }} onClick={props.onExit}>← Back to demo</button>
+          <button className="btn" style={{ marginTop: '12px' }} onClick={props.onExit}>Open the simulation →</button>
         </div>
       </div>
     );
@@ -140,7 +140,7 @@ export function LiveConsole(props: { onExit: () => void }) {
 
   let body: any = null;
   switch (tab) {
-    case 'command': body = renderCommandCenter(live, s, setTab); break;
+    case 'command': body = renderCommandCenter(live, s, setTab, props.onExit); break;
     case 'preflight': body = renderPreflight(live, s, () => store.recheck()); break;
     case 'gpus': body = renderGPUs(live, s, gpuFilters, setGpuFilters, openGpu, setOpenGpu); break;
     case 'incidents':
@@ -202,7 +202,7 @@ export function LiveConsole(props: { onExit: () => void }) {
           : <button className="btn btn-primary" disabled={live.busy !== ''} onClick={() => store.start()}>Resume collection</button>}
         <button className="btn" disabled={live.busy !== ''} onClick={() => store.recheck()}>{live.busy === 'recheck' ? 'Checking…' : 'Re-check everything'}</button>
         <button className="btn" onClick={() => download(`gpu-lens-live-${new Date().toISOString().replace(/[:.]/g, '-')}.json`, store.exportSnapshot())}>Export JSON</button>
-        <button className="btn" onClick={props.onExit}>← Back to demo</button>
+        <button className="btn" onClick={props.onExit}>Open the simulation →</button>
       </div>
 
       {s.status.emulated && (
