@@ -13,6 +13,7 @@ import (
 	"github.com/gpulens/gpu-lens/internal/capacity"
 	"github.com/gpulens/gpu-lens/internal/config"
 	"github.com/gpulens/gpu-lens/internal/domain"
+	"github.com/gpulens/gpu-lens/internal/live"
 	"github.com/gpulens/gpu-lens/internal/rules"
 	"github.com/gpulens/gpu-lens/internal/source"
 	"github.com/gpulens/gpu-lens/internal/store"
@@ -27,6 +28,8 @@ type Server struct {
 	incidentStore *store.IncidentStore
 	logger        *slog.Logger
 	mux           *http.ServeMux
+	// live is the optional live telemetry engine behind /api/v1/live/* (see live_handlers.go).
+	live *live.Engine
 }
 
 // NewServer constructs a configured HTTP API and static UI server.
@@ -47,6 +50,16 @@ func NewServer(cfg config.Config, fixtureSource *source.FixtureSource, engine *r
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// The live API exposes real host and cluster data and accepts state-changing requests, so it is
+	// same-origin only: no CORS headers are sent and cross-origin preflights are refused.
+	if isLivePath(r.URL.Path) {
+		if r.Method == http.MethodOptions {
+			writeError(w, http.StatusForbidden, "live API refused: cross-origin requests are not allowed")
+			return
+		}
+		s.mux.ServeHTTP(w, r)
+		return
+	}
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
@@ -297,10 +310,17 @@ func (s *Server) handleSelectScenario(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleStaticUI(w http.ResponseWriter, r *http.Request) {
+	if isLivePath(r.URL.Path) {
+		// An API path that no handler claims is an API error, never the single-page app.
+		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
 	if s.cfg.StaticDir == "" {
 		writeJSON(w, http.StatusOK, map[string]string{"service": "gpu-lens-api"})
 		return
 	}
+	// Always revalidate so a rebuilt or upgraded bundle is picked up without a hard refresh.
+	w.Header().Set("Cache-Control", "no-cache")
 	cleanPath := filepath.Clean(r.URL.Path)
 	if cleanPath == "/" || cleanPath == "." {
 		http.ServeFile(w, r, filepath.Join(s.cfg.StaticDir, "index.html"))
