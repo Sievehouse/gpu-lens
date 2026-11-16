@@ -99,3 +99,27 @@ metric_mappings:
   pod_name_label_candidates: ["pod", "pod_name"]
   namespace_label_candidates: ["namespace", "pod_namespace"]
   container_label_candidates: ["container", "container_name"]
+
+# ---------------------------------------------------------------------------------------------------------
+# Go Live (the "Go Live" button). The live console is configured with flags, GPULENS_* environment variables
+# and the in-app Connections tab, not with this file — the keys below document the equivalents.
+# Everything is optional: with no configuration GPU Lens probes the conventional local addresses.
+# ---------------------------------------------------------------------------------------------------------
+# live:
+#   enabled: true                         # GPULENS_LIVE_ENABLED         / --no-live
+#   interval_seconds: 2                   # GPULENS_LIVE_INTERVAL_SECONDS / --live-interval   (1-300)
+#   idle_timeout_seconds: 900             # GPULENS_LIVE_IDLE_TIMEOUT_SECONDS: stop collecting after this long with no viewer (0 = never; 0 by default with --mode live)
+#   allow_remote_config: false            # GPULENS_LIVE_ALLOW_REMOTE_CONFIG: let non-local browsers edit connections
+#   cluster_name: ""                      # GPULENS_CLUSTER_NAME
+#   nvidia_smi: true                      # GPULENS_NVIDIA_SMI / --no-nvidia-smi ; path: GPULENS_NVIDIA_SMI_PATH / --nvidia-smi-path
+#   host_vitals: true                     # GPULENS_HOST_VITALS / --no-host-vitals
+#   dcgm_exporter:                        # probes http://127.0.0.1:9400/metrics when no URL is given
+#     url: ""                             # GPULENS_DCGM_EXPORTER_URL / --dcgm-url
+#   prometheus:                           # probes http://127.0.0.1:9090
+#     url: ""                             # GPULENS_PROMETHEUS_URL / --prometheus-url
+#     token_file: ""                      # GPULENS_PROMETHEUS_TOKEN_FILE   (GPULENS_PROMETHEUS_TOKEN also works)
+#     backfill_minutes: 60                # GPULENS_PROMETHEUS_BACKFILL_MINUTES (Go runtime)
+#   kubernetes:                           # in-cluster service account when present, else probes `kubectl proxy` on :8001
+#     url: ""                             # GPULENS_KUBERNETES_URL / --kubernetes-url
+#     token_file: ""                      # GPULENS_KUBERNETES_TOKEN_FILE
+#     ca_file: ""                         # GPULENS_KUBERNETES_CA_FILE
