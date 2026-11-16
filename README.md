@@ -9,6 +9,8 @@
 - **Part 1 — Simulated demo.** The original console with six deterministic scenarios. Works fully offline and is unchanged.
 - **Part 2 — Go Live.** Press the **Go Live** button and GPU Lens switches to real, read-only telemetry: it runs a preflight check of *every* source (local `nvidia-smi`, host vitals, DCGM exporter, Prometheus, Kubernetes API, cross-source correlation), then keeps collecting, merging and evaluating the same six rules live — with GPU cards, nodes & pods, incidents (with a resolved log), capacity, trend charts, host vitals, an activity log, live-editable thresholds, connection settings and JSON/CSV export. No GPU? `python3 scripts/live_lab.py` serves a clearly-labelled synthetic cluster to try it against.
 
+Both parts use a clean **white** theme by default; the **Dark mode** button (bottom-left) switches to the original dark look and the choice is remembered in the browser.
+
 Full guide: [`docs/LIVE.md`](docs/LIVE.md).
 
 ![Go Live — command center](docs/screenshots/05-golive-command-center.png)
