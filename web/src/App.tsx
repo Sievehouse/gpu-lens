@@ -540,7 +540,7 @@ function renderOverviewTab(
   );
 }
 
-function renderIncidentsTab(
+export function renderIncidentsTab(
   incidents: Incident[],
   severityFilter: string,
   setSeverityFilter: (v: string) => void,
@@ -679,7 +679,7 @@ function renderIncidentsTab(
   );
 }
 
-function renderIncidentDetailTab(
+export function renderIncidentDetailTab(
   selected: Incident | null,
   allIncidents: Incident[],
   onSelect: (inc: Incident) => void
@@ -893,7 +893,7 @@ function renderIncidentDetailTab(
   );
 }
 
-function renderCapacityTab(cap: any) {
+export function renderCapacityTab(cap: any) {
   const history: UtilizationHistoryPoint[] = cap.historical_utilization || [];
   const meth = cap.methodology || {};
 
@@ -1159,7 +1159,7 @@ function renderUtilizationSVGChart(points: UtilizationHistoryPoint[], threshold:
   );
 }
 
-function renderSourcesTab(overview: OverviewResponse, sourcesDetail: any) {
+export function renderSourcesTab(overview: OverviewResponse, sourcesDetail: any) {
   const sources: any[] = overview.sources || [];
   const mappings = sourcesDetail?.metric_mappings || {};
   const exported = sourcesDetail?.exported_metrics || {};
@@ -1283,7 +1283,7 @@ function renderSourcesTab(overview: OverviewResponse, sourcesDetail: any) {
   );
 }
 
-function renderRulesTab(rulesList: RuleDefinition[]) {
+export function renderRulesTab(rulesList: RuleDefinition[]) {
   return (
     <div>
       {rulesList.map((r) => (
