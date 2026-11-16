@@ -10,27 +10,27 @@ import (
 // This allows operators to adapt to custom dcgm-exporter CSVs or --use-old-namespace flags without code changes.
 type MetricMappingConfig struct {
 	// Default DCGM Exporter metrics (enabled in shipped default-counters.csv / dcp-metrics-included.csv)
-	GPUUtilMetric             string `json:"gpu_util_metric"`
-	MemCopyUtilMetric         string `json:"mem_copy_util_metric"`
-	FBUsedMetric              string `json:"fb_used_metric"`
-	FBFreeMetric              string `json:"fb_free_metric"`
-	GPUTempMetric             string `json:"gpu_temp_metric"`
-	MemoryTempMetric          string `json:"memory_temp_metric"`
-	PowerUsageMetric          string `json:"power_usage_metric"`
-	XIDErrorsMetric           string `json:"xid_errors_metric"`
-	PCIeReplayMetric          string `json:"pcie_replay_metric"`
-	RowRemapFailureMetric     string `json:"row_remap_failure_metric"`
-	UncorrectableRemapMetric  string `json:"uncorrectable_remap_metric"`
+	GPUUtilMetric            string `json:"gpu_util_metric"`
+	MemCopyUtilMetric        string `json:"mem_copy_util_metric"`
+	FBUsedMetric             string `json:"fb_used_metric"`
+	FBFreeMetric             string `json:"fb_free_metric"`
+	GPUTempMetric            string `json:"gpu_temp_metric"`
+	MemoryTempMetric         string `json:"memory_temp_metric"`
+	PowerUsageMetric         string `json:"power_usage_metric"`
+	XIDErrorsMetric          string `json:"xid_errors_metric"`
+	PCIeReplayMetric         string `json:"pcie_replay_metric"`
+	RowRemapFailureMetric    string `json:"row_remap_failure_metric"`
+	UncorrectableRemapMetric string `json:"uncorrectable_remap_metric"`
 
 	// Optional DCGM Exporter metrics (commented by default in dcgm-exporter CSV; evaluated only when present)
-	ECCDBEVolTotalMetric      string `json:"ecc_dbe_vol_total_metric"`
-	ECCSBEVolTotalMetric      string `json:"ecc_sbe_vol_total_metric"`
-	NVLinkCRCFlitErrorMetric  string `json:"nvlink_crc_flit_error_metric"`
-	NVLinkReplayErrorMetric   string `json:"nvlink_replay_error_metric"`
-	ThermalViolationMetric    string `json:"thermal_violation_metric"`
-	PowerViolationMetric      string `json:"power_violation_metric"`
+	ECCDBEVolTotalMetric       string `json:"ecc_dbe_vol_total_metric"`
+	ECCSBEVolTotalMetric       string `json:"ecc_sbe_vol_total_metric"`
+	NVLinkCRCFlitErrorMetric   string `json:"nvlink_crc_flit_error_metric"`
+	NVLinkReplayErrorMetric    string `json:"nvlink_replay_error_metric"`
+	ThermalViolationMetric     string `json:"thermal_violation_metric"`
+	PowerViolationMetric       string `json:"power_violation_metric"`
 	ExporterHealthStatusMetric string `json:"exporter_health_status_metric"`
-	ClockEventsCountMetric    string `json:"clock_events_count_metric"`
+	ClockEventsCountMetric     string `json:"clock_events_count_metric"`
 
 	// Configurable label keys (supporting both default and --use-old-namespace conventions)
 	UUIDLabelCandidates      []string `json:"uuid_label_candidates"`
@@ -49,31 +49,31 @@ type RuleThresholds struct {
 	CriticalPendingMinutes float64 `json:"critical_pending_minutes"`
 
 	// Rule 2: GPU-HEALTH-002 (GPU Hardware Fault or Health Degradation)
-	XIDErrorThreshold         int `json:"xid_error_threshold"`
-	ECCDBEThreshold           int `json:"ecc_dbe_threshold"`
-	RowRemapFailureThreshold  int `json:"row_remap_failure_threshold"`
-	PCIeReplayWarningCount    int `json:"pcie_replay_warning_count"`
-	NVLinkCRCErrorThreshold   int `json:"nvlink_crc_error_threshold"`
+	XIDErrorThreshold        int `json:"xid_error_threshold"`
+	ECCDBEThreshold          int `json:"ecc_dbe_threshold"`
+	RowRemapFailureThreshold int `json:"row_remap_failure_threshold"`
+	PCIeReplayWarningCount   int `json:"pcie_replay_warning_count"`
+	NVLinkCRCErrorThreshold  int `json:"nvlink_crc_error_threshold"`
 
 	// Rule 3: GPU-UTIL-003 (Persistently Low Utilization)
-	LowUtilThresholdPercent   float64 `json:"low_util_threshold_percent"`
-	LowUtilWindowMinutes      float64 `json:"low_util_window_minutes"`
-	MinUtilizationSamples     int     `json:"min_utilization_samples"`
-	HighVRAMContextPercent    float64 `json:"high_vram_context_percent"`
+	LowUtilThresholdPercent float64 `json:"low_util_threshold_percent"`
+	LowUtilWindowMinutes    float64 `json:"low_util_window_minutes"`
+	MinUtilizationSamples   int     `json:"min_utilization_samples"`
+	HighVRAMContextPercent  float64 `json:"high_vram_context_percent"`
 
 	// Rule 4: GPU-CORR-004 (Workload Failure Correlation)
-	CorrelationLeadMinutes    float64 `json:"correlation_lead_minutes"`
-	CorrelationLagMinutes     float64 `json:"correlation_lag_minutes"`
+	CorrelationLeadMinutes float64 `json:"correlation_lead_minutes"`
+	CorrelationLagMinutes  float64 `json:"correlation_lag_minutes"`
 
 	// Rule 5: GPU-FRESH-005 (Monitoring Data Freshness)
-	MaxStalenessSeconds       float64 `json:"max_staleness_seconds"`
+	MaxStalenessSeconds float64 `json:"max_staleness_seconds"`
 
 	// Rule 6: GPU-THERM-006 (Thermal, Power, and Memory Pressure)
-	TempWarningCelsius        float64 `json:"temp_warning_celsius"`
-	TempCriticalCelsius       float64 `json:"temp_critical_celsius"`
-	MemTempWarningCelsius     float64 `json:"mem_temp_warning_celsius"`
-	FBMemoryWarningPercent    float64 `json:"fb_memory_warning_percent"`
-	PowerCapWarningPercent    float64 `json:"power_cap_warning_percent"`
+	TempWarningCelsius     float64 `json:"temp_warning_celsius"`
+	TempCriticalCelsius    float64 `json:"temp_critical_celsius"`
+	MemTempWarningCelsius  float64 `json:"mem_temp_warning_celsius"`
+	FBMemoryWarningPercent float64 `json:"fb_memory_warning_percent"`
+	PowerCapWarningPercent float64 `json:"power_cap_warning_percent"`
 
 	// Optional Capacity Cost Estimation (0 or nil means disabled; never presented as realized savings)
 	OptionalSampleGPUHourlyRateUSD *float64 `json:"optional_sample_gpu_hourly_rate_usd,omitempty"`
@@ -81,19 +81,19 @@ type RuleThresholds struct {
 
 // SourceConfig configures offline fixture mode and optional read-only infrastructure adapters.
 type SourceConfig struct {
-	Mode                   string        `json:"mode"` // "fixture" or "live"
-	DefaultScenarioID      string        `json:"default_scenario_id"`
-	FixturesDir            string        `json:"fixtures_dir"`
-	HTTPTimeout            time.Duration `json:"http_timeout"`
-	MaxResponseBytes       int64         `json:"max_response_bytes"`
-	PrometheusEnabled      bool          `json:"prometheus_enabled"`
-	PrometheusEndpoint     string        `json:"prometheus_endpoint"`
-	PrometheusBearerToken  string        `json:"prometheus_bearer_token,omitempty"`
-	DCGMExporterEnabled    bool          `json:"dcgm_exporter_enabled"`
-	DCGMExporterEndpoint   string        `json:"dcgm_exporter_endpoint"`
-	KubernetesEnabled      bool          `json:"kubernetes_enabled"`
-	KubernetesAPIServer    string        `json:"kubernetes_api_server"`
-	KubernetesBearerToken  string        `json:"kubernetes_bearer_token,omitempty"`
+	Mode                  string        `json:"mode"` // "fixture" or "live"
+	DefaultScenarioID     string        `json:"default_scenario_id"`
+	FixturesDir           string        `json:"fixtures_dir"`
+	HTTPTimeout           time.Duration `json:"http_timeout"`
+	MaxResponseBytes      int64         `json:"max_response_bytes"`
+	PrometheusEnabled     bool          `json:"prometheus_enabled"`
+	PrometheusEndpoint    string        `json:"prometheus_endpoint"`
+	PrometheusBearerToken string        `json:"prometheus_bearer_token,omitempty"`
+	DCGMExporterEnabled   bool          `json:"dcgm_exporter_enabled"`
+	DCGMExporterEndpoint  string        `json:"dcgm_exporter_endpoint"`
+	KubernetesEnabled     bool          `json:"kubernetes_enabled"`
+	KubernetesAPIServer   string        `json:"kubernetes_api_server"`
+	KubernetesBearerToken string        `json:"kubernetes_bearer_token,omitempty"`
 }
 
 // Config is the top-level application configuration.
@@ -105,6 +105,8 @@ type Config struct {
 	Source         SourceConfig        `json:"source"`
 	Thresholds     RuleThresholds      `json:"thresholds"`
 	MetricMappings MetricMappingConfig `json:"metric_mappings"`
+	// Live configures the live telemetry console ("Go Live"), which runs next to the fixture demo.
+	Live LiveConfig `json:"live"`
 }
 
 // DefaultMetricMapping returns the official NVIDIA DCGM Exporter metric names and label conventions.
@@ -175,13 +177,14 @@ func DefaultConfig() Config {
 		StaticDir:     "web/dist",
 		Source: SourceConfig{
 			Mode:              "fixture",
-			DefaultScenarioID: "scenario-4-correlated-failure",
+			DefaultScenarioID: "scenario-5-correlated-failure",
 			FixturesDir:       "fixtures",
 			HTTPTimeout:       10 * time.Second,
 			MaxResponseBytes:  16 * 1024 * 1024, // 16 MiB
 		},
 		Thresholds:     DefaultRuleThresholds(),
 		MetricMappings: DefaultMetricMapping(),
+		Live:           DefaultLiveConfig(),
 	}
 }
 
@@ -211,10 +214,35 @@ func (c Config) Validate() error {
 	if c.Thresholds.TempWarningCelsius <= 0 || c.Thresholds.TempCriticalCelsius <= c.Thresholds.TempWarningCelsius {
 		return errors.New("config: thresholds.temp_critical_celsius must be greater than temp_warning_celsius")
 	}
-	if c.Source.Mode == "live" && !c.Source.PrometheusEnabled && !c.Source.DCGMExporterEnabled && !c.Source.KubernetesEnabled {
-		return errors.New("config: live mode requires at least one of prometheus_enabled, dcgm_exporter_enabled, or kubernetes_enabled")
+	if err := ValidateThresholds(c.Thresholds); err != nil {
+		return fmt.Errorf("config: thresholds.%w", err)
+	}
+	if err := c.Live.Validate(); err != nil {
+		return fmt.Errorf("config: %w", err)
+	}
+	if c.Source.Mode == "live" {
+		if !c.Live.Enabled {
+			return errors.New("config: source.mode 'live' requires the live console to be enabled")
+		}
+		if !c.Live.NvidiaSMIEnabled && !c.Live.DCGM.Enabled && !c.Live.Prometheus.Enabled && !c.Live.Kubernetes.Enabled {
+			return errors.New("config: live mode requires at least one telemetry source (nvidia-smi, DCGM exporter, Prometheus, or Kubernetes) to be enabled")
+		}
 	}
 	return nil
+}
+
+// ApplyLegacySourceFields maps the older source.*_enabled settings onto the live console configuration so that
+// existing programmatic configuration keeps working.
+func (c *Config) ApplyLegacySourceFields() {
+	if c.Source.PrometheusEnabled && !c.Live.Prometheus.Explicit && c.Source.PrometheusEndpoint != "" {
+		c.Live.Prometheus = LiveSourceConfig{Enabled: true, Explicit: true, Endpoint: c.Source.PrometheusEndpoint, BearerToken: c.Source.PrometheusBearerToken}
+	}
+	if c.Source.DCGMExporterEnabled && !c.Live.DCGM.Explicit && c.Source.DCGMExporterEndpoint != "" {
+		c.Live.DCGM = LiveSourceConfig{Enabled: true, Explicit: true, Endpoint: c.Source.DCGMExporterEndpoint}
+	}
+	if c.Source.KubernetesEnabled && !c.Live.Kubernetes.Explicit && c.Source.KubernetesAPIServer != "" {
+		c.Live.Kubernetes = LiveSourceConfig{Enabled: true, Explicit: true, Endpoint: c.Source.KubernetesAPIServer, BearerToken: c.Source.KubernetesBearerToken}
+	}
 }
 
 // RedactedCopy returns a copy of Config with sensitive tokens masked for safe logging and API inspection.
