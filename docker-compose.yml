@@ -7,11 +7,25 @@ services:
       dockerfile: Dockerfile
     container_name: gpu-lens-demo
     ports:
-      - "8080:8080"
+      # Bound to the loopback interface only: the live console shows real host and cluster data.
+      - "127.0.0.1:8080:8080"
     environment:
       - GPULENS_LISTEN_ADDR=:8080
       - GPULENS_DEFAULT_SCENARIO=scenario-5-correlated-failure
       - GPULENS_FIXTURES_DIR=/app/fixtures
+      # Go Live. Inside a container the browser is not "the machine running GPU Lens", so connection settings are
+      # only editable in the UI when this is true. Safe here because the port is published on 127.0.0.1 only.
+      - GPULENS_LIVE_ALLOW_REMOTE_CONFIG=true
+      # Point Go Live at your telemetry (all optional; each one is probed or disabled when unset):
+      # - GPULENS_DCGM_EXPORTER_URL=http://gpu-node:9400/metrics
+      # - GPULENS_PROMETHEUS_URL=http://prometheus:9090
+      # - GPULENS_PROMETHEUS_TOKEN_FILE=/run/secrets/prometheus_token
+      # - GPULENS_KUBERNETES_URL=https://kubernetes.example:6443
+      # - GPULENS_KUBERNETES_TOKEN_FILE=/run/secrets/k8s_token
+      # - GPULENS_KUBERNETES_CA_FILE=/run/secrets/k8s_ca.crt
+      # - GPULENS_CLUSTER_NAME=prod-gpu
+    # To read the Live Lab emulator running on the Docker host (python3 scripts/live_lab.py --host 0.0.0.0):
+    # extra_hosts: ["host.docker.internal:host-gateway"]
     volumes:
       - gpulens_data:/app/data
     read_only: true
