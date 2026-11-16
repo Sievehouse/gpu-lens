@@ -45,5 +45,11 @@ jobs:
       - name: Build Go binary
         run: go build -v -o bin/gpulens ./cmd/gpulens
 
+      - name: Build the frontend bundle
+        run: node web/scripts/build_offline.js
+
       - name: Run end-to-end verification suite
         run: python3 scripts/run_verification_suite.py
+
+      - name: Live API black-box tests (Go and Python runtimes, Live Lab emulator, nvidia-smi test double)
+        run: python3 tests/live_blackbox.py both
