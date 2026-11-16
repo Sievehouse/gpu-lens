@@ -653,29 +653,110 @@ body {
 .lv-form-grid .scenario-select { width: 100%; max-width: 220px; }
 
 /* =====================================================================================================
-   Light theme (white background) — the default. Implemented by inverting the dark palette, so every
-   colour in the demo and in Go Live (including inline-styled text and SVG charts) stays consistent and
-   legible. Neutral surface values are chosen so that, after inversion, the page is pure white and cards
-   are light grey. Hues are rotated back so blue stays blue, red stays red, green stays green.
+   Light theme (white background) — the default. A hand-built palette: the page is pure white, cards are
+   white with a hairline border and a soft shadow, and every text / badge / chart colour that was tuned for
+   a dark canvas is re-tuned for contrast on white (WCAG AA for body text). Inline-styled text and SVG
+   chart colours are matched by attribute selectors so no component markup differs between themes.
    ===================================================================================================== */
 html[data-theme="light"] {
-  filter: invert(1) hue-rotate(180deg);
-  --bg-canvas: #000000;
-  --bg-surface: #0a0a0a;
-  --bg-elevated: #141414;
-  --bg-muted: #0f0f0f;
-  --border-subtle: #262626;
-  --border-strong: #3d3d3d;
-  --text-primary: #e8f0ff;
-  --text-secondary: #aab4c4;
-  --text-muted: #8791a3;
-  background: #ffffff;
+  color-scheme: light;
+  --bg-canvas: #ffffff;
+  --bg-surface: #ffffff;
+  --bg-elevated: #f1f5f9;
+  --bg-muted: #f8fafc;
+  --border-subtle: #e2e8f0;
+  --border-strong: #cbd5e1;
+  --text-primary: #0f172a;
+  --text-secondary: #475569;
+  --text-muted: #64748b;
+  --accent-blue: #0284c7;
+  --accent-indigo: #4f46e5;
+  --status-healthy: #059669;
+  --status-healthy-bg: rgba(5, 150, 105, 0.10);
+  --status-warning: #d97706;
+  --status-warning-bg: rgba(217, 119, 6, 0.12);
+  --status-critical: #dc2626;
+  --status-critical-bg: rgba(220, 38, 38, 0.08);
+  --status-blindspot: #7e22ce;
+  --status-blindspot-bg: rgba(126, 34, 206, 0.08);
 }
-html[data-theme="light"] body { background-color: var(--bg-canvas); }
-/* Fixed helper buttons keep their own look instead of being inverted with the page. */
-html[data-theme="light"] .golive-launcher,
-html[data-theme="light"] .theme-toggle { filter: invert(1) hue-rotate(180deg); }
+html[data-theme="light"] body { background-color: #ffffff; color: var(--text-primary); }
 
+/* surfaces: hairline border + very soft shadow so white cards stay distinct on a white page */
+html[data-theme="light"] .panel,
+html[data-theme="light"] .lv-stat,
+html[data-theme="light"] .lv-gpu,
+html[data-theme="light"] .lv-source,
+html[data-theme="light"] .lv-conn { box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04), 0 1px 3px rgba(15, 23, 42, 0.04); }
+html[data-theme="light"] .top-header { box-shadow: 0 1px 0 #e2e8f0; }
+
+/* banners and bars */
+html[data-theme="light"] .sim-banner { background: linear-gradient(90deg, #eef2ff 0%, #e0f2fe 60%, #f0f9ff 100%); border-bottom: 1px solid #bfdbfe; color: #334155; }
+html[data-theme="light"] .sim-badge { background: rgba(2, 132, 199, 0.10); color: #0369a1; border-color: rgba(2, 132, 199, 0.35); }
+html[data-theme="light"] .lv-topbar { background: #f8fafc; border-bottom: 1px solid #e2e8f0; }
+html[data-theme="light"] .lv-live-pill { background: rgba(220, 38, 38, 0.08); border-color: rgba(220, 38, 38, 0.35); color: #b91c1c; }
+html[data-theme="light"] .lv-pulse { background: #94a3b8; }
+html[data-theme="light"] .lv-pulse.on { background: #dc2626; }
+html[data-theme="light"] .lv-emulated { background: rgba(126, 34, 206, 0.08); border-bottom: 1px solid rgba(126, 34, 206, 0.30); color: #581c87; }
+html[data-theme="light"] .lv-alert.error { color: #991b1b; }
+html[data-theme="light"] .lv-alert.warn { color: #92400e; }
+html[data-theme="light"] .lv-alert.ok { color: #065f46; }
+html[data-theme="light"] .lv-hint { color: #0369a1; }
+html[data-theme="light"] .lv-error { color: #b91c1c; }
+html[data-theme="light"] .disclaimer-box { color: #78350f; background: rgba(217, 119, 6, 0.08); border-color: rgba(217, 119, 6, 0.35); }
+html[data-theme="light"] .blindspot-box { color: #581c87; background: rgba(126, 34, 206, 0.07); border-color: rgba(126, 34, 206, 0.30); }
+
+/* navigation, buttons, badges */
+html[data-theme="light"] .nav-tab.active { color: #0f172a; background: #f1f5f9; }
+html[data-theme="light"] .tab-count { background: rgba(15, 23, 42, 0.08); }
+html[data-theme="light"] .btn:hover { color: #0f172a; }
+html[data-theme="light"] .btn-primary { background: #0284c7; color: #ffffff; border-color: #0284c7; }
+html[data-theme="light"] .btn-primary:hover { background: #0369a1; color: #ffffff; }
+html[data-theme="light"] .badge.critical { color: #b91c1c; border-color: rgba(220, 38, 38, 0.35); }
+html[data-theme="light"] .badge.warning { color: #92400e; border-color: rgba(217, 119, 6, 0.40); }
+html[data-theme="light"] .badge.info,
+html[data-theme="light"] .badge.contextual { background: rgba(2, 132, 199, 0.10); color: #0369a1; border-color: rgba(2, 132, 199, 0.35); }
+html[data-theme="light"] .badge.healthy,
+html[data-theme="light"] .badge.strong,
+html[data-theme="light"] .badge.triggered { color: #047857; border-color: rgba(5, 150, 105, 0.40); }
+html[data-theme="light"] .badge.inconclusive,
+html[data-theme="light"] .badge.telemetry_blind_spot { color: #7e22ce; border-color: rgba(126, 34, 206, 0.35); }
+html[data-theme="light"] .badge.moderate { background: rgba(79, 70, 229, 0.10); color: #4338ca; border-color: rgba(79, 70, 229, 0.35); }
+html[data-theme="light"] .data-table th { background: #f8fafc; }
+html[data-theme="light"] .data-table tr:hover td { background: #f8fafc; }
+html[data-theme="light"] .lv-dot { background: #94a3b8; }
+html[data-theme="light"] .lv-check-icon { background: #e2e8f0; color: #475569; }
+html[data-theme="light"] .lv-check-icon.info { background: rgba(2, 132, 199, 0.10); }
+html[data-theme="light"] .lv-meter { background: #e2e8f0; }
+html[data-theme="light"] .lv-throttle { color: #92400e; }
+html[data-theme="light"] .lv-chip.on { color: #047857; }
+
+/* inline-styled text in the simulation and console (matched by the colour written in the component) */
+html[data-theme="light"] [style*="rgb(248, 250, 252)"],
+html[data-theme="light"] [style*="rgb(226, 232, 240)"] { color: #0f172a !important; }
+html[data-theme="light"] [style*="rgb(203, 213, 225)"] { color: #334155 !important; }
+html[data-theme="light"] [style*="rgb(147, 197, 253)"] { color: #1d4ed8 !important; }
+html[data-theme="light"] [style*="rgb(125, 211, 252)"] { color: #0369a1 !important; }
+html[data-theme="light"] [style*="rgb(252, 165, 165)"] { color: #b91c1c !important; }
+html[data-theme="light"] [style*="rgb(252, 211, 77)"],
+html[data-theme="light"] [style*="rgb(253, 230, 138)"] { color: #92400e !important; }
+html[data-theme="light"] [style*="rgb(233, 213, 255)"] { color: #6b21a8 !important; }
+html[data-theme="light"] [style*="rgb(110, 231, 183)"] { color: #047857 !important; }
+
+/* SVG charts: gridlines, labels and series tuned for a white plot area */
+html[data-theme="light"] svg [stroke="#263248"],
+html[data-theme="light"] svg [stroke="#1e293b"] { stroke: #e2e8f0; }
+html[data-theme="light"] svg [fill="#64748b"] { fill: #64748b; }
+html[data-theme="light"] svg [fill="#94a3b8"] { fill: #64748b; }
+html[data-theme="light"] svg [stroke="#38bdf8"] { stroke: #0284c7; }
+html[data-theme="light"] svg [fill="#38bdf8"] { fill: #0284c7; }
+html[data-theme="light"] svg [stroke="#10b981"] { stroke: #059669; }
+html[data-theme="light"] svg [fill="#10b981"] { fill: #059669; }
+html[data-theme="light"] svg [stroke="#f59e0b"] { stroke: #d97706; }
+html[data-theme="light"] svg [fill="#f59e0b"] { fill: #b45309; }
+html[data-theme="light"] .lv-heat rect[fill="#1b2436"] { fill: #e2e8f0; }
+
+/* floating buttons */
 .theme-toggle {
   position: fixed; left: 22px; bottom: 22px; z-index: 50; cursor: pointer;
   padding: 8px 14px; border-radius: 999px; font-family: var(--font-sans); font-size: 12.5px; font-weight: 700;
@@ -683,4 +764,15 @@ html[data-theme="light"] .theme-toggle { filter: invert(1) hue-rotate(180deg); }
 }
 .theme-toggle:hover { background: #1b2436; }
 .theme-toggle:focus-visible { outline: 2px solid #38bdf8; outline-offset: 2px; }
+html[data-theme="light"] .theme-toggle { color: #0f172a; background: #ffffff; border-color: #cbd5e1; box-shadow: 0 4px 14px rgba(15, 23, 42, 0.12); }
+html[data-theme="light"] .theme-toggle:hover { background: #f1f5f9; }
+html[data-theme="light"] .golive-launcher { box-shadow: 0 8px 24px rgba(220, 38, 38, 0.28), 0 2px 6px rgba(15, 23, 42, 0.15); }
 @media print { .theme-toggle, .golive-launcher { display: none !important; } }
+
+/* ----- Go Live welcome panel (shown when no GPU telemetry is reachable) ----- */
+.lv-welcome { margin-bottom: 16px; }
+.lv-welcome-lead { color: var(--text-secondary); margin: 6px 0 14px; max-width: 760px; }
+.lv-welcome-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+.lv-welcome-card { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; border: 1px solid var(--border-subtle); border-radius: 10px; padding: 14px; background: var(--bg-muted); }
+.lv-welcome-card > b { font-size: 14px; }
+.lv-welcome-card > span { color: var(--text-secondary); font-size: 13px; flex: 1; }
