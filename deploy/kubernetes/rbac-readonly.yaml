@@ -1,6 +1,11 @@
 # Minimum Read-Only Kubernetes RBAC Manifest for GPU Lens
 # Grants strictly read-only verbs (get, list, watch) on nodes, pods, and events.
 # Zero access to secrets, configmaps, pods/exec, pods/log, or mutating verbs.
+#
+# Go Live (the live console) needs exactly this and nothing more. Create a token for the service account and pass it by file:
+#   kubectl -n gpu-lens create token gpulens-reader --duration=24h > /run/secrets/k8s_token
+#   gpulens -kubernetes-url https://<api-server> -kubernetes-token-file /run/secrets/k8s_token -kubernetes-ca-file /run/secrets/k8s_ca.crt
+# Running inside the cluster under this service account needs no flags: the in-cluster token and CA are detected.
 apiVersion: v1
 kind: Namespace
 metadata:
