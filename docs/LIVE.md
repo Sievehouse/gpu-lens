@@ -1,15 +1,15 @@
 # Go Live — real, read-only telemetry
 
-GPU Lens has two parts in one UI:
+GPU Lens has two views in one UI:
 
-| | Part 1 — Simulated demo | Part 2 — **Go Live** |
+| | **Go Live** (opens first) | Simulation |
 | :-- | :-- | :-- |
-| What you see | The original console and its six deterministic scenarios, unchanged | A live console fed by this machine and your cluster |
-| Data | `fixtures/*.json` | `nvidia-smi`, host vitals, DCGM exporter, Prometheus, Kubernetes API |
-| How to open | Default page | Press the floating **Go Live** button (or open `/?view=live`) |
-| How to leave | — | **Exit live** (top right) returns to the demo exactly as it was |
+| What you see | A live console fed by this machine and your cluster | The original console and its six deterministic scenarios, unchanged |
+| Data | `nvidia-smi`, host vitals, DCGM exporter, Prometheus, Kubernetes API | `fixtures/*.json` |
+| How to open | The default page (`/`) | **Open the simulation** (top right of Go Live), or `/?view=demo` |
+| How to switch back | — | Press the floating **Go Live** button |
 
-The button lives outside the demo's root element, so Part 1 renders byte-for-byte as it did before Go Live existed.
+The Go Live button lives outside the simulation's root element, so the simulation renders exactly as it did before Go Live existed. Both views share a white theme (default) with a **Dark mode** toggle.
 
 ## What happens when you press Go Live
 
