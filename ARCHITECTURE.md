@@ -151,7 +151,7 @@ Every entity in `ClusterSnapshot` uses explicit keys so correlation across layer
 
 ## 5. Go Live: live telemetry engine
 
-Go Live adds a second, isolated path next to the fixture demo. The demo (`/api/v1/overview`, `/incidents`, …) is untouched; everything live sits behind `/api/v1/live/*` and the Part 2 UI.
+Go Live adds a second, isolated path next to the fixture demo. The demo (`/api/v1/overview`, `/incidents`, …) is untouched; everything live sits behind `/api/v1/live/*` and the Go Live UI.
 
 ```text
  nvidia-smi ─┐                                                    ┌─ /api/v1/live/state ─► LiveConsole (web/src/live)
@@ -164,7 +164,7 @@ Go Live adds a second, isolated path next to the fixture demo. The demo (`/api/v
 
 - **`internal/live`** — `collect.go` (source scheduling and state machine: pending → connected / degraded / unreachable / not_found / disabled / error), `merge.go` (per-UUID observation merge, inferred nodes and host-process pods, windowed low-utilisation input), `lifecycle.go` (incident tracking, history, activity diffing), `preflight.go` (the checklist), `view.go` (payload). The rules and capacity calculator are the *same* `internal/rules` and `internal/capacity` code the demo uses; the engine only builds a `ClusterSnapshot` from live observations.
 - **Epistemics preserved.** A GPU with no fresh sample is stale and is excluded from health verdicts and raises `GPU-FRESH-005`. A metric absent from every source is "not exported", never `0`. The low-utilisation window is built from real observation time (`anchorWindow` pins its ends so the capacity calculator and the rule agree) so a freshly-seen workload is not accused of being idle for an hour.
-- **Isolation of the UI.** The launcher is plain DOM outside `#root`; live mode is `?view=live`; the root factory swaps `<App/>` and `<LiveConsole/>`. `App.tsx` only gained `export`s. A DOM-snapshot regression (125 states) against the original build proves Part 1 is unchanged.
+- **Isolation of the UI.** The launcher is plain DOM outside `#root`; Go Live is the default view and the simulation is `?view=demo`; the root factory swaps `<LiveConsole/>` and `<App/>`. `App.tsx` only gained `export`s. A DOM-snapshot regression (125 states, loaded with `?view=demo`) against the original build proves the simulation is unchanged. The white theme is CSS only (`html[data-theme]`), including attribute-selector overrides for inline-styled text and SVG chart colours, so no markup differs between themes.
 
 ### Python runtime parity
 
