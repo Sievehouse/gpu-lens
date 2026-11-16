@@ -108,26 +108,26 @@ type NodeState struct {
 
 // GPUMetricPoint is a single time-series observation for a GPU device.
 type GPUMetricPoint struct {
-	Timestamp                  time.Time `json:"timestamp"`
-	GPUUtilPercent             float64   `json:"gpu_util_percent"`               // DCGM_FI_DEV_GPU_UTIL (%)
-	MemCopyUtilPercent         float64   `json:"mem_copy_util_percent"`          // DCGM_FI_DEV_MEM_COPY_UTIL (%)
-	FBUsedMiB                  float64   `json:"fb_used_mib"`                    // DCGM_FI_DEV_FB_USED (MiB)
-	FBFreeMiB                  float64   `json:"fb_free_mib"`                    // DCGM_FI_DEV_FB_FREE (MiB)
-	GPUTempCelsius             float64   `json:"gpu_temp_celsius"`               // DCGM_FI_DEV_GPU_TEMP (C)
-	MemoryTempCelsius          float64   `json:"memory_temp_celsius"`            // DCGM_FI_DEV_MEMORY_TEMP (C)
-	PowerUsageWatts            float64   `json:"power_usage_watts"`              // DCGM_FI_DEV_POWER_USAGE (W)
-	XIDErrorCode               int       `json:"xid_error_code"`                 // DCGM_FI_DEV_XID_ERRORS (last XID code)
-	PCIeReplayCounter          int       `json:"pcie_replay_counter"`            // DCGM_FI_DEV_PCIE_REPLAY_COUNTER
-	RowRemapFailure            int       `json:"row_remap_failure"`              // DCGM_FI_DEV_ROW_REMAP_FAILURE (0 or 1)
-	UncorrectableRemappedRows  int       `json:"uncorrectable_remapped_rows"`    // DCGM_FI_DEV_UNCORRECTABLE_REMAPPED_ROWS
-	ECCDBEVolTotal             *int      `json:"ecc_dbe_vol_total,omitempty"`    // Optional: DCGM_FI_DEV_ECC_DBE_VOL_TOTAL
-	ECCSBEVolTotal             *int      `json:"ecc_sbe_vol_total,omitempty"`    // Optional: DCGM_FI_DEV_ECC_SBE_VOL_TOTAL
-	NVLinkCRCFlitErrors        *int      `json:"nvlink_crc_flit_errors,omitempty"` // Optional: DCGM_FI_DEV_NVLINK_CRC_FLIT_ERROR_COUNT_TOTAL
-	NVLinkReplayErrors         *int      `json:"nvlink_replay_errors,omitempty"` // Optional: DCGM_FI_DEV_NVLINK_REPLAY_ERROR_COUNT_TOTAL
-	ThermalViolationNs         *int64    `json:"thermal_violation_ns,omitempty"` // Optional: DCGM_FI_DEV_THERMAL_VIOLATION
-	PowerViolationNs           *int64    `json:"power_violation_ns,omitempty"`   // Optional: DCGM_FI_DEV_POWER_VIOLATION
-	HealthStatus               *int      `json:"health_status,omitempty"`        // Optional: DCGM_EXP_GPU_HEALTH_STATUS (0=PASS, 10=WARN, 20=FAIL)
-	ClockThrottleReason        string    `json:"clock_throttle_reason,omitempty"` // Optional: DCGM_EXP_CLOCK_EVENTS_COUNT clock_event label
+	Timestamp                 time.Time `json:"timestamp"`
+	GPUUtilPercent            float64   `json:"gpu_util_percent"`                 // DCGM_FI_DEV_GPU_UTIL (%)
+	MemCopyUtilPercent        float64   `json:"mem_copy_util_percent"`            // DCGM_FI_DEV_MEM_COPY_UTIL (%)
+	FBUsedMiB                 float64   `json:"fb_used_mib"`                      // DCGM_FI_DEV_FB_USED (MiB)
+	FBFreeMiB                 float64   `json:"fb_free_mib"`                      // DCGM_FI_DEV_FB_FREE (MiB)
+	GPUTempCelsius            float64   `json:"gpu_temp_celsius"`                 // DCGM_FI_DEV_GPU_TEMP (C)
+	MemoryTempCelsius         float64   `json:"memory_temp_celsius"`              // DCGM_FI_DEV_MEMORY_TEMP (C)
+	PowerUsageWatts           float64   `json:"power_usage_watts"`                // DCGM_FI_DEV_POWER_USAGE (W)
+	XIDErrorCode              int       `json:"xid_error_code"`                   // DCGM_FI_DEV_XID_ERRORS (last XID code)
+	PCIeReplayCounter         int       `json:"pcie_replay_counter"`              // DCGM_FI_DEV_PCIE_REPLAY_COUNTER
+	RowRemapFailure           int       `json:"row_remap_failure"`                // DCGM_FI_DEV_ROW_REMAP_FAILURE (0 or 1)
+	UncorrectableRemappedRows int       `json:"uncorrectable_remapped_rows"`      // DCGM_FI_DEV_UNCORRECTABLE_REMAPPED_ROWS
+	ECCDBEVolTotal            *int      `json:"ecc_dbe_vol_total,omitempty"`      // Optional: DCGM_FI_DEV_ECC_DBE_VOL_TOTAL
+	ECCSBEVolTotal            *int      `json:"ecc_sbe_vol_total,omitempty"`      // Optional: DCGM_FI_DEV_ECC_SBE_VOL_TOTAL
+	NVLinkCRCFlitErrors       *int      `json:"nvlink_crc_flit_errors,omitempty"` // Optional: DCGM_FI_DEV_NVLINK_CRC_FLIT_ERROR_COUNT_TOTAL
+	NVLinkReplayErrors        *int      `json:"nvlink_replay_errors,omitempty"`   // Optional: DCGM_FI_DEV_NVLINK_REPLAY_ERROR_COUNT_TOTAL
+	ThermalViolationNs        *int64    `json:"thermal_violation_ns,omitempty"`   // Optional: DCGM_FI_DEV_THERMAL_VIOLATION
+	PowerViolationNs          *int64    `json:"power_violation_ns,omitempty"`     // Optional: DCGM_FI_DEV_POWER_VIOLATION
+	HealthStatus              *int      `json:"health_status,omitempty"`          // Optional: DCGM_EXP_GPU_HEALTH_STATUS (0=PASS, 10=WARN, 20=FAIL)
+	ClockThrottleReason       string    `json:"clock_throttle_reason,omitempty"`  // Optional: DCGM_EXP_CLOCK_EVENTS_COUNT clock_event label
 }
 
 // GPUDevice represents a physical GPU or MIG instance reported by telemetry.
@@ -180,6 +180,9 @@ type WorkloadPod struct {
 	Tolerations      []string              `json:"tolerations,omitempty"`
 	SchedulerReason  string                `json:"scheduler_reason,omitempty"`
 	SchedulerMessage string                `json:"scheduler_message,omitempty"`
+	// StatusDetail is a short kubectl-style status hint (for example "ContainerCreating", "CrashLoopBackOff")
+	// or, for workloads inferred from telemetry, a note about where the attribution came from.
+	StatusDetail string `json:"status_detail,omitempty"`
 }
 
 // K8sEvent represents a normalized Kubernetes Event associated with a Pod or Node.
@@ -275,21 +278,21 @@ type RuleDefinition struct {
 
 // NodeCapacityBreakdown summarizes GPU capacity and utilization per node.
 type NodeCapacityBreakdown struct {
-	NodeName          string   `json:"node_name"`
-	GPUModel          string   `json:"gpu_model"`
-	Schedulable       bool     `json:"schedulable"`
-	Ready             bool     `json:"ready"`
-	CapacityGPUs      int      `json:"capacity_gpus"`
-	AllocatableGPUs   int      `json:"allocatable_gpus"`
-	UnavailableGPUs   int      `json:"unavailable_gpus"`
-	AllocatedGPUs     int      `json:"allocated_gpus"`
-	FreeAllocatable   int      `json:"free_allocatable_gpus"`
-	MeanGPUUtil       *float64 `json:"mean_gpu_util_percent,omitempty"`
-	MeanFBUsedPct     *float64 `json:"mean_fb_used_percent,omitempty"`
-	FreshGPUs         int      `json:"fresh_gpus"`
-	StaleGPUs         int      `json:"stale_gpus"`
-	UnmappedPodGPUs   int      `json:"unmapped_pod_gpus"`
-	StatusNote        string   `json:"status_note"`
+	NodeName        string   `json:"node_name"`
+	GPUModel        string   `json:"gpu_model"`
+	Schedulable     bool     `json:"schedulable"`
+	Ready           bool     `json:"ready"`
+	CapacityGPUs    int      `json:"capacity_gpus"`
+	AllocatableGPUs int      `json:"allocatable_gpus"`
+	UnavailableGPUs int      `json:"unavailable_gpus"`
+	AllocatedGPUs   int      `json:"allocated_gpus"`
+	FreeAllocatable int      `json:"free_allocatable_gpus"`
+	MeanGPUUtil     *float64 `json:"mean_gpu_util_percent,omitempty"`
+	MeanFBUsedPct   *float64 `json:"mean_fb_used_percent,omitempty"`
+	FreshGPUs       int      `json:"fresh_gpus"`
+	StaleGPUs       int      `json:"stale_gpus"`
+	UnmappedPodGPUs int      `json:"unmapped_pod_gpus"`
+	StatusNote      string   `json:"status_note"`
 }
 
 // PendingWorkloadSummary summarizes a pending GPU pod and its observable scheduling reason.
@@ -307,26 +310,26 @@ type PendingWorkloadSummary struct {
 
 // LowUtilPodWindow documents a running workload whose allocated GPUs show persistently low compute utilization.
 type LowUtilPodWindow struct {
-	Namespace               string    `json:"namespace"`
-	PodName                 string    `json:"pod_name"`
-	OwnerRef                string    `json:"owner_ref"`
-	NodeName                string    `json:"node_name"`
-	AllocatedGPUs           int       `json:"allocated_gpus"`
-	AssignedGPUUUIDs        []string  `json:"assigned_gpu_uuids"`
-	ObservationWindowMins   float64   `json:"observation_window_minutes"`
-	SampleCount             int       `json:"sample_count"`
-	MeanGPUUtilPercent      float64   `json:"mean_gpu_util_percent"`
-	MinGPUUtilPercent       float64   `json:"min_gpu_util_percent"`
-	MaxGPUUtilPercent       float64   `json:"max_gpu_util_percent"`
-	MeanMemCopyUtilPercent  float64   `json:"mean_mem_copy_util_percent"`
-	MeanFBUsedMiB           float64   `json:"mean_fb_used_mib"`
-	MeanFBUsedPercent       float64   `json:"mean_fb_used_percent"`
-	TotalAllocatedGPUHours  float64   `json:"total_allocated_gpu_hours"`
-	LowUtilGPUHours         float64   `json:"low_util_gpu_hours"`
-	OptionalSampleCostEst   *float64  `json:"optional_sample_cost_estimate_usd,omitempty"`
-	LastDataUpdate          time.Time `json:"last_data_update"`
-	WorkloadContextNote     string    `json:"workload_context_note"`
-	FollowUpChecklist       []string  `json:"follow_up_checklist"`
+	Namespace              string    `json:"namespace"`
+	PodName                string    `json:"pod_name"`
+	OwnerRef               string    `json:"owner_ref"`
+	NodeName               string    `json:"node_name"`
+	AllocatedGPUs          int       `json:"allocated_gpus"`
+	AssignedGPUUUIDs       []string  `json:"assigned_gpu_uuids"`
+	ObservationWindowMins  float64   `json:"observation_window_minutes"`
+	SampleCount            int       `json:"sample_count"`
+	MeanGPUUtilPercent     float64   `json:"mean_gpu_util_percent"`
+	MinGPUUtilPercent      float64   `json:"min_gpu_util_percent"`
+	MaxGPUUtilPercent      float64   `json:"max_gpu_util_percent"`
+	MeanMemCopyUtilPercent float64   `json:"mean_mem_copy_util_percent"`
+	MeanFBUsedMiB          float64   `json:"mean_fb_used_mib"`
+	MeanFBUsedPercent      float64   `json:"mean_fb_used_percent"`
+	TotalAllocatedGPUHours float64   `json:"total_allocated_gpu_hours"`
+	LowUtilGPUHours        float64   `json:"low_util_gpu_hours"`
+	OptionalSampleCostEst  *float64  `json:"optional_sample_cost_estimate_usd,omitempty"`
+	LastDataUpdate         time.Time `json:"last_data_update"`
+	WorkloadContextNote    string    `json:"workload_context_note"`
+	FollowUpChecklist      []string  `json:"follow_up_checklist"`
 }
 
 // UtilizationHistoryPoint represents a cluster-wide historical utilization sample across fresh GPUs.
@@ -340,59 +343,59 @@ type UtilizationHistoryPoint struct {
 
 // CapacityMethodology documents the exact formulas and caveats used in the capacity report.
 type CapacityMethodology struct {
-	UtilThresholdPercent         float64  `json:"util_threshold_percent"`
-	MinWindowMinutes             float64  `json:"min_window_minutes"`
-	MinSamplesRequired           int      `json:"min_samples_required"`
-	FormulaSummary               string   `json:"formula_summary"`
-	StepByStepCalculation        []string `json:"step_by_step_calculation"`
-	NonWasteDisclaimer           string   `json:"non_waste_disclaimer"`
-	MissingMappingPolicy         string   `json:"missing_mapping_policy"`
-	OptionalSampleHourlyRateUSD  *float64 `json:"optional_sample_hourly_rate_usd,omitempty"`
-	OptionalCostEstimateLabel    string   `json:"optional_cost_estimate_label,omitempty"`
+	UtilThresholdPercent        float64  `json:"util_threshold_percent"`
+	MinWindowMinutes            float64  `json:"min_window_minutes"`
+	MinSamplesRequired          int      `json:"min_samples_required"`
+	FormulaSummary              string   `json:"formula_summary"`
+	StepByStepCalculation       []string `json:"step_by_step_calculation"`
+	NonWasteDisclaimer          string   `json:"non_waste_disclaimer"`
+	MissingMappingPolicy        string   `json:"missing_mapping_policy"`
+	OptionalSampleHourlyRateUSD *float64 `json:"optional_sample_hourly_rate_usd,omitempty"`
+	OptionalCostEstimateLabel   string   `json:"optional_cost_estimate_label,omitempty"`
 }
 
 // CapacityReport is the complete GPU capacity and utilization intelligence response.
 type CapacityReport struct {
-	ClusterName                   string                    `json:"cluster_name"`
-	ScenarioID                    string                    `json:"scenario_id"`
-	DataMode                      string                    `json:"data_mode"`
-	GeneratedAt                   time.Time                 `json:"generated_at"`
-	TotalCapacityGPUs             int                       `json:"total_capacity_gpus"`
-	TotalAllocatableGPUs          int                       `json:"total_allocatable_gpus"`
-	UnavailableHardwareGPUs       int                       `json:"unavailable_hardware_gpus"`
-	TotalAllocatedGPUs            int                       `json:"total_allocated_gpus"`
-	TotalFreeAllocatableGPUs      int                       `json:"total_free_allocatable_gpus"`
-	PendingRequestedGPUs          int                       `json:"pending_requested_gpus"`
-	ClusterMeanGPUUtilPercent     *float64                  `json:"cluster_mean_gpu_util_percent,omitempty"`
-	ClusterMeanFBUsedPercent      *float64                  `json:"cluster_mean_fb_used_percent,omitempty"`
-	TotalObservedAllocatedGPUHrs  float64                   `json:"total_observed_allocated_gpu_hours"`
-	ObservedLowUtilGPUHours       float64                   `json:"observed_low_util_gpu_hours"`
-	OptionalLowUtilSampleCostUSD  *float64                  `json:"optional_low_util_sample_cost_usd,omitempty"`
-	TelemetryFreshGPUs            int                       `json:"telemetry_fresh_gpus"`
-	TelemetryStaleGPUs            int                       `json:"telemetry_stale_gpus"`
-	MappedAllocatedGPUs           int                       `json:"mapped_allocated_gpus"`
-	UnmappedAllocatedGPUs         int                       `json:"unmapped_allocated_gpus"`
-	PerJobAttributionComplete     bool                      `json:"per_job_attribution_complete"`
-	AttributionBlindSpotWarning   string                    `json:"attribution_blind_spot_warning,omitempty"`
-	Nodes                         []NodeCapacityBreakdown   `json:"nodes"`
-	PendingWorkloads              []PendingWorkloadSummary  `json:"pending_workloads"`
-	LowUtilizationWorkloads       []LowUtilPodWindow        `json:"low_utilization_workloads"`
-	HistoricalUtilization         []UtilizationHistoryPoint `json:"historical_utilization"`
-	Methodology                   CapacityMethodology       `json:"methodology"`
+	ClusterName                  string                    `json:"cluster_name"`
+	ScenarioID                   string                    `json:"scenario_id"`
+	DataMode                     string                    `json:"data_mode"`
+	GeneratedAt                  time.Time                 `json:"generated_at"`
+	TotalCapacityGPUs            int                       `json:"total_capacity_gpus"`
+	TotalAllocatableGPUs         int                       `json:"total_allocatable_gpus"`
+	UnavailableHardwareGPUs      int                       `json:"unavailable_hardware_gpus"`
+	TotalAllocatedGPUs           int                       `json:"total_allocated_gpus"`
+	TotalFreeAllocatableGPUs     int                       `json:"total_free_allocatable_gpus"`
+	PendingRequestedGPUs         int                       `json:"pending_requested_gpus"`
+	ClusterMeanGPUUtilPercent    *float64                  `json:"cluster_mean_gpu_util_percent,omitempty"`
+	ClusterMeanFBUsedPercent     *float64                  `json:"cluster_mean_fb_used_percent,omitempty"`
+	TotalObservedAllocatedGPUHrs float64                   `json:"total_observed_allocated_gpu_hours"`
+	ObservedLowUtilGPUHours      float64                   `json:"observed_low_util_gpu_hours"`
+	OptionalLowUtilSampleCostUSD *float64                  `json:"optional_low_util_sample_cost_usd,omitempty"`
+	TelemetryFreshGPUs           int                       `json:"telemetry_fresh_gpus"`
+	TelemetryStaleGPUs           int                       `json:"telemetry_stale_gpus"`
+	MappedAllocatedGPUs          int                       `json:"mapped_allocated_gpus"`
+	UnmappedAllocatedGPUs        int                       `json:"unmapped_allocated_gpus"`
+	PerJobAttributionComplete    bool                      `json:"per_job_attribution_complete"`
+	AttributionBlindSpotWarning  string                    `json:"attribution_blind_spot_warning,omitempty"`
+	Nodes                        []NodeCapacityBreakdown   `json:"nodes"`
+	PendingWorkloads             []PendingWorkloadSummary  `json:"pending_workloads"`
+	LowUtilizationWorkloads      []LowUtilPodWindow        `json:"low_utilization_workloads"`
+	HistoricalUtilization        []UtilizationHistoryPoint `json:"historical_utilization"`
+	Methodology                  CapacityMethodology       `json:"methodology"`
 }
 
 // OverviewResponse aggregates key fleet reliability and capacity indicators for the Overview page.
 type OverviewResponse struct {
-	ClusterName           string         `json:"cluster_name"`
-	ScenarioID            string         `json:"scenario_id"`
-	ScenarioName          string         `json:"scenario_name"`
-	ScenarioDescription   string         `json:"scenario_description"`
-	DataMode              string         `json:"data_mode"`
-	CollectedAt           time.Time      `json:"collected_at"`
-	FleetHealthStatus     string         `json:"fleet_health_status"` // "healthy", "warning", "critical", "telemetry_blind_spot"
-	FleetHealthHeadline   string         `json:"fleet_health_headline"`
-	ActiveIncidentCounts  map[string]int `json:"active_incident_counts"`
-	CapacitySummary       CapacityReport `json:"capacity_summary"`
-	ActiveIncidents       []Incident     `json:"active_incidents"`
-	Sources               []SourceHealth `json:"sources"`
+	ClusterName          string         `json:"cluster_name"`
+	ScenarioID           string         `json:"scenario_id"`
+	ScenarioName         string         `json:"scenario_name"`
+	ScenarioDescription  string         `json:"scenario_description"`
+	DataMode             string         `json:"data_mode"`
+	CollectedAt          time.Time      `json:"collected_at"`
+	FleetHealthStatus    string         `json:"fleet_health_status"` // "healthy", "warning", "critical", "telemetry_blind_spot"
+	FleetHealthHeadline  string         `json:"fleet_health_headline"`
+	ActiveIncidentCounts map[string]int `json:"active_incident_counts"`
+	CapacitySummary      CapacityReport `json:"capacity_summary"`
+	ActiveIncidents      []Incident     `json:"active_incidents"`
+	Sources              []SourceHealth `json:"sources"`
 }
