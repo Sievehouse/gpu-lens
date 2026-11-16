@@ -1,4 +1,4 @@
-.PHONY: all demo build test verify-local fixtures frontend lint docker-up clean
+.PHONY: all demo live live-lab build test test-live verify-local fixtures frontend lint docker-up clean
 
 GO_BIN := $(shell command -v go 2>/dev/null)
 
@@ -22,13 +22,18 @@ else
 	@echo "[Info] 'go' binary not found in PATH; using verified local runtime engine (scripts/local_runtime_server.py)."
 endif
 
-## Run automated unit & integration tests (Go test suite + offline verification harness)
+## Run automated unit & integration tests (Go test suite + offline verification harness + live API black-box tests)
 test: fixtures frontend
 ifdef GO_BIN
 	go vet ./...
-	go test -v -race ./...
+	go test -race ./...
 endif
 	python3 scripts/run_verification_suite.py
+	python3 tests/live_blackbox.py both
+
+## Black-box test of the Go Live API against the real server(s): bare machine, request guards, nvidia-smi test double, Live Lab
+test-live: frontend
+	python3 tests/live_blackbox.py both
 
 ## Run offline verification harness explicitly
 verify-local: fixtures frontend
@@ -42,9 +47,21 @@ else
 	python3 scripts/local_runtime_server.py --port 8080 --fixtures-dir ./fixtures --static-dir ./web/dist
 endif
 
+## Start with live collection already running (auto-detects nvidia-smi, DCGM on :9400, Prometheus on :9090, kubectl proxy on :8001)
+live: frontend
+ifdef GO_BIN
+	go run ./cmd/gpulens -listen :8080 -mode live -fixtures-dir ./fixtures -static-dir ./web/dist
+else
+	python3 scripts/local_runtime_server.py --port 8080 --mode live --fixtures-dir ./fixtures --static-dir ./web/dist
+endif
+
+## Start the Live Lab: a clearly-labelled SYNTHETIC dcgm-exporter (:9400) + Kubernetes API (:8001) so Go Live can be tried without GPUs
+live-lab:
+	python3 scripts/live_lab.py
+
 ## Start via Docker Compose
 docker-up:
 	docker compose up --build
 
 clean:
-	rm -rf bin/ gpulens.db
+	rm -rf bin/ gpulens.db gpulens-state.json
