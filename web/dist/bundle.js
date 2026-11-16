@@ -1614,14 +1614,14 @@ function LiveConsole(props) {
                 (0, jsx_runtime_1.h)("p", { style: { color: 'var(--text-secondary)', marginTop: '8px' } }, store_1.live.error || 'Starting collection and checking every telemetry source (host, NVIDIA driver, DCGM, Prometheus, Kubernetes).'),
                 (0, jsx_runtime_1.h)("div", { style: { marginTop: '12px', display: 'flex', gap: '8px' } },
                     (0, jsx_runtime_1.h)("button", { className: "btn", onClick: () => store.refresh() }, "Retry"),
-                    (0, jsx_runtime_1.h)("button", { className: "btn", onClick: props.onExit }, "\u2190 Back to demo")))));
+                    (0, jsx_runtime_1.h)("button", { className: "btn", onClick: props.onExit }, "Open the simulation \u2192")))));
     }
     if (!s.status.supported) {
         return ((0, jsx_runtime_1.h)("div", { className: "main-container" },
             (0, jsx_runtime_1.h)("div", { className: "panel" },
                 (0, jsx_runtime_1.h)("div", { className: "panel-title" }, "Go Live is switched off"),
                 (0, jsx_runtime_1.h)("p", { style: { color: 'var(--text-secondary)', marginTop: '8px' } }, s.status.unsupported_reason || 'The live console is disabled in this build.'),
-                (0, jsx_runtime_1.h)("button", { className: "btn", style: { marginTop: '12px' }, onClick: props.onExit }, "\u2190 Back to demo"))));
+                (0, jsx_runtime_1.h)("button", { className: "btn", style: { marginTop: '12px' }, onClick: props.onExit }, "Open the simulation \u2192"))));
     }
     const ov = s.overview;
     const incidents = (ov && ov.active_incidents) || [];
@@ -1670,7 +1670,7 @@ function LiveConsole(props) {
     let body = null;
     switch (tab) {
         case 'command':
-            body = (0, views_a_1.renderCommandCenter)(store_1.live, s, setTab);
+            body = (0, views_a_1.renderCommandCenter)(store_1.live, s, setTab, props.onExit);
             break;
         case 'preflight':
             body = (0, views_a_1.renderPreflight)(store_1.live, s, () => store.recheck());
@@ -1751,7 +1751,7 @@ function LiveConsole(props) {
                 : (0, jsx_runtime_1.h)("button", { className: "btn btn-primary", disabled: store_1.live.busy !== '', onClick: () => store.start() }, "Resume collection"),
             (0, jsx_runtime_1.h)("button", { className: "btn", disabled: store_1.live.busy !== '', onClick: () => store.recheck() }, store_1.live.busy === 'recheck' ? 'Checking…' : 'Re-check everything'),
             (0, jsx_runtime_1.h)("button", { className: "btn", onClick: () => (0, ui_1.download)(`gpu-lens-live-${new Date().toISOString().replace(/[:.]/g, '-')}.json`, store.exportSnapshot()) }, "Export JSON"),
-            (0, jsx_runtime_1.h)("button", { className: "btn", onClick: props.onExit }, "\u2190 Back to demo")),
+            (0, jsx_runtime_1.h)("button", { className: "btn", onClick: props.onExit }, "Open the simulation \u2192")),
         s.status.emulated && ((0, jsx_runtime_1.h)("div", { className: "lv-emulated" },
             (0, jsx_runtime_1.h)("b", null, "EMULATED DATA"),
             " \u2014 the connected DCGM/Kubernetes endpoints are the GPU Lens ",
@@ -2266,7 +2266,7 @@ function sevKind(s) {
 function verdictClass(v) {
     return v === 'ready' ? 'healthy' : v === 'degraded' ? 'warning' : v === 'blocked' ? 'critical' : 'inconclusive';
 }
-function renderCommandCenter(L, s, go) {
+function renderCommandCenter(L, s, go, openSimulation) {
     const ov = s.overview;
     const pts = L.history;
     const times = pts.map((p) => p.t);
@@ -2285,7 +2285,30 @@ function renderCommandCenter(L, s, go) {
     const power = gpus.reduce((a, g) => a + (g.latest.power_usage_watts || 0), 0);
     const havePower = gpus.some((g) => g.latest.power_usage_watts !== null);
     const incidents = ov?.active_incidents || [];
+    const welcome = gpus.length === 0 && s.status.tick > 0 && ((0, jsx_runtime_1.h)("div", { className: "panel lv-welcome" },
+        (0, jsx_runtime_1.h)("div", { className: "panel-title" }, "Nothing to monitor on this machine yet"),
+        (0, jsx_runtime_1.h)("p", { className: "lv-welcome-lead" },
+            "GPU Lens checked every source and found no GPU. That is reported honestly as ",
+            (0, jsx_runtime_1.h)("b", null, "no telemetry"),
+            ", never as healthy. Pick a way forward:"),
+        (0, jsx_runtime_1.h)("div", { className: "lv-welcome-grid" },
+            (0, jsx_runtime_1.h)("div", { className: "lv-welcome-card" },
+                (0, jsx_runtime_1.h)("b", null, "Look around first"),
+                (0, jsx_runtime_1.h)("span", null, "Open the simulation: six deterministic cluster scenarios with full incident evidence. No GPU needed."),
+                openSimulation && (0, jsx_runtime_1.h)("button", { className: "btn btn-primary", onClick: openSimulation }, "Open the simulation \u2192")),
+            (0, jsx_runtime_1.h)("div", { className: "lv-welcome-card" },
+                (0, jsx_runtime_1.h)("b", null, "Try Go Live without hardware"),
+                (0, jsx_runtime_1.h)("span", null,
+                    "Run ",
+                    (0, jsx_runtime_1.h)("span", { className: "mono" }, "python scripts/live_lab.py"),
+                    " next to GPU Lens: a clearly-labelled synthetic 8-GPU cluster appears here within seconds."),
+                (0, jsx_runtime_1.h)("button", { className: "btn", onClick: () => go('preflight') }, "See what was checked")),
+            (0, jsx_runtime_1.h)("div", { className: "lv-welcome-card" },
+                (0, jsx_runtime_1.h)("b", null, "Connect real GPUs"),
+                (0, jsx_runtime_1.h)("span", null, "Run GPU Lens on a machine with an NVIDIA driver, or point it at a DCGM exporter, Prometheus or Kubernetes API."),
+                (0, jsx_runtime_1.h)("button", { className: "btn", onClick: () => go('connections') }, "Open Connections")))));
     return ((0, jsx_runtime_1.h)("div", null,
+        welcome,
         (0, jsx_runtime_1.h)("div", { className: "lv-stat-grid" },
             (0, jsx_runtime_1.h)(ui_1.Stat, { label: "GPUs monitored", value: gpus.length, sub: `${fresh} fresh · ${gpus.length - fresh} stale`, kind: gpus.length - fresh > 0 ? 'warning' : '' }),
             (0, jsx_runtime_1.h)(ui_1.Stat, { label: "Fleet utilization", value: (0, ui_1.num)(latest?.util, 1, '%'), sub: "mean GPU SM util" }),
@@ -3017,10 +3040,10 @@ exports.isLive = isLive;
 exports.setLive = setLive;
 exports.initMode = initMode;
 exports.mountLauncher = mountLauncher;
-// Switches between part 1 (simulated demo) and part 2 (Go Live). Part 1's DOM is never modified: the launcher
-// button is a separate element outside the app root.
+// Switches between Go Live (the default view) and the simulated demo (?view=demo). The simulation's DOM is never
+// modified: the launcher button is a separate element outside the app root.
 const jsx_runtime_1 = require("./jsx-runtime");
-let liveMode = false;
+let liveMode = true;
 function isLive() {
     return liveMode;
 }
@@ -3028,9 +3051,9 @@ function syncUrl() {
     try {
         const u = new URL(window.location.href);
         if (liveMode)
-            u.searchParams.set('view', 'live');
-        else {
             u.searchParams.delete('view');
+        else {
+            u.searchParams.set('view', 'demo');
             u.searchParams.delete('live_tab');
         }
         window.history.replaceState(null, '', u.toString());
@@ -3052,10 +3075,11 @@ function setLive(on) {
 }
 function initMode() {
     try {
-        liveMode = new URLSearchParams(window.location.search).get('view') === 'live';
+        // Go Live opens first; ?view=demo opens the simulation. (Old ?view=live links keep working.)
+        liveMode = new URLSearchParams(window.location.search).get('view') !== 'demo';
     }
     catch {
-        liveMode = false;
+        liveMode = true;
     }
 }
 /** The "Go Live" launcher: plain DOM appended to <body>, outside the demo's #root. */
@@ -3066,7 +3090,7 @@ function mountLauncher() {
     btn.id = 'golive-launcher';
     btn.type = 'button';
     btn.className = 'golive-launcher';
-    btn.title = 'Switch from the simulated demo to live telemetry from this machine and your GPU infrastructure';
+    btn.title = 'Switch from the simulation to live telemetry from this machine and your GPU infrastructure';
     btn.innerHTML = '<span class="golive-dot"></span><span class="golive-text">Go Live</span>';
     btn.addEventListener('click', () => setLive(true));
     document.body.appendChild(btn);
