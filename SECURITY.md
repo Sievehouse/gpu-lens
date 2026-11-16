@@ -7,7 +7,8 @@ GPU Lens is designed as a **strictly read-only, non-invasive diagnostic and capa
 1. **Zero Cluster or Workload Mutation**:
    - GPU Lens never creates, updates, patches, deletes, evicts, or scales Kubernetes resources (`Pods`, `Jobs`, `Nodes`, `Deployments`, `DaemonSets`, `ResourceClaims`).
    - GPU Lens never cordons, uncordons, taints, labels, or drains Kubernetes nodes.
-2. **Zero Host Execution or Invasive GPU Diagnostics**:
+2. **Minimal Host Execution and No Invasive GPU Diagnostics**:
+   - The one local command GPU Lens can run (Go Live only) is `nvidia-smi`, started directly (no shell) with a fixed allow-list of `--query-gpu` / `--query-compute-apps` / `--format` arguments, an 8-second timeout and a bounded output size. It is discovered from `PATH` and well-known install directories, or given with `--nvidia-smi-path`, and can be disabled with `--no-nvidia-smi`. Host vitals are read from `/proc` and `/sys` only.
    - GPU Lens never opens SSH sessions, `pods/exec` streams, or privileged host containers.
    - GPU Lens never triggers active GPU stress tests or invasive diagnostics (such as `dcgmi diag -r 2/3` or `nccl-loopback`), which can disrupt production workloads or require exclusive GPU access.
 3. **Zero External Data Egress or AI API Dependencies**:
@@ -102,3 +103,22 @@ To prevent accidental mutation even if a bug is introduced into a future adapter
 3. **What Unit Tests Prove vs. What Requires Production Verification**:
    - Unit and integration tests in this repository prove that the `ReadOnlyRoundTripper` rejects mutating HTTP verbs, that sensitive config fields are redacted in API outputs, that malformed inputs are rejected, and that missing/stale metrics trigger blind-spot warnings.
    - Unit tests **do not** replace network policy enforcement (`NetworkPolicy`), TLS certificate validation against a live cluster CA, or RBAC verification (`kubectl auth can-i --list`) in a live production environment.
+
+---
+
+## 6. Go Live (live console) Security Model
+
+The live API (`/api/v1/live/*`) exposes real host and cluster data and accepts state-changing requests, so it is stricter than the demo API:
+
+| Threat | Control |
+| :-- | :-- |
+| Cross-site request from a malicious web page | Same-origin only: `Origin` must equal `Host`, `Sec-Fetch-Site: cross-site` is refused, no CORS headers are sent, preflights are refused |
+| DNS rebinding against a local instance | A loopback caller must present a local `Host` (`localhost`, an IP, or this machine's hostname) |
+| CSRF with a form post | POST requires `Content-Type: application/json` |
+| Remote user re-pointing the collector (SSRF-style) | Connection settings are changeable only from the machine running GPU Lens, never through a reverse proxy (`X-Forwarded-For` / `Forwarded` / `X-Real-IP` ⇒ not local), unless `--live-allow-remote-config` is set |
+| Credential disclosure | Bearer tokens are write-only (`token_set: true` is reported), are cleared when the endpoint they were entered for changes, are redacted from error text, and token / CA / binary paths are not settable over the API |
+| Mutating an external system | Transport guard rejects every verb except GET/HEAD before any socket is opened; a self-test at start-up proves it and fails the preflight loudly if it ever stops being true |
+| Resource exhaustion | Response size caps, per-request timeouts, bounded history / activity / resolved-incident buffers, 64 KiB request bodies, and an idle timeout that stops collection when no viewer is attached |
+| Misleading output | Synthetic Live Lab data is always labelled (`live_emulated`, banner, per-GPU flag); missing telemetry is reported as missing, never as healthy or zero |
+
+Residual risk: with `--live-allow-remote-config` any client that can reach the port can re-point the collector and read the cluster view. Put it behind your own authentication, or leave it off and bind to loopback (the shipped `docker-compose.yml` publishes on `127.0.0.1` only).
