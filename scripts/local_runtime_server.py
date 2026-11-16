@@ -12,9 +12,12 @@ import json
 import math
 import os
 import sqlite3
+import sys
 import threading
 import urllib.parse
 from datetime import datetime, timezone
+
+import gpulens_live
 
 DEFAULT_THRESHOLDS = {
     "pending_grace_seconds": 60,
@@ -1773,7 +1776,7 @@ class GPULensAppState:
         }
 
 
-def make_handler(state: GPULensAppState):
+def make_handler(state: GPULensAppState, live_api=None):
     class Handler(http.server.BaseHTTPRequestHandler):
         def log_message(self, fmt, *args):
             pass
@@ -1787,10 +1790,34 @@ def make_handler(state: GPULensAppState):
             self.end_headers()
             self.wfile.write(raw)
 
+        def _live(self, method, parsed, qs):
+            """Serve /api/v1/live/*; never carries the demo's permissive CORS header."""
+            if live_api is None:
+                status, payload = 404, {"error": "live console is not available"}
+            else:
+                body = b""
+                if method == "POST":
+                    try:
+                        n = int(self.headers.get("Content-Length") or 0)
+                    except ValueError:
+                        n = 0
+                    body = self.rfile.read(min(n, 64 * 1024 + 1)) if n > 0 else b""
+                headers = {k: v for k, v in self.headers.items()}
+                status, payload = live_api.handle(method, parsed.path, {k: v[0] for k, v in qs.items()}, headers, self.client_address[0], body)
+            raw = json.dumps(payload).encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+
         def do_GET(self):
             parsed = urllib.parse.urlparse(self.path)
             qs = urllib.parse.parse_qs(parsed.query)
             scen_param = qs.get("scenario", [""])[0]
+            if gpulens_live.is_live_path(parsed.path):
+                return self._live("GET", parsed, qs)
 
             if parsed.path == "/healthz":
                 return self._send_json(200, {"status": "ok", "service": "gpu-lens"})
@@ -1862,6 +1889,9 @@ def make_handler(state: GPULensAppState):
             self._send_json(404, {"error": "not found"})
 
         def do_POST(self):
+            parsed = urllib.parse.urlparse(self.path)
+            if gpulens_live.is_live_path(parsed.path):
+                return self._live("POST", parsed, urllib.parse.parse_qs(parsed.query))
             if self.path == "/api/v1/scenarios/select":
                 length = int(self.headers.get("Content-Length", "0"))
                 body = json.loads(self.rfile.read(length).decode("utf-8"))
@@ -1882,12 +1912,25 @@ def main():
     parser.add_argument("--scenario", default="scenario-5-correlated-failure")
     parser.add_argument("--db-path", default="gpulens.db")
     parser.add_argument("--static-dir", default="web/dist")
+    gpulens_live.add_cli_args(parser)
     args = parser.parse_args()
 
     state = GPULensAppState(args.fixtures_dir, args.scenario, args.db_path, args.static_dir)
-    srv = http.server.ThreadingHTTPServer((args.host, args.port), make_handler(state))
-    print(f"GPU Lens server listening on http://127.0.0.1:{args.port} (scenario={state.active_id})")
-    srv.serve_forever()
+    try:
+        live_cfg = gpulens_live.build_config(args)
+    except gpulens_live.LiveError as e:
+        raise SystemExit(f"invalid startup configuration: {e}")
+    engine = gpulens_live.Engine(sys.modules[__name__], live_cfg)
+    srv = http.server.ThreadingHTTPServer((args.host, args.port), make_handler(state, gpulens_live.LiveAPI(engine)))
+    print(f"GPU Lens server listening on http://127.0.0.1:{args.port} (scenario={state.active_id}, mode={args.mode}, live console={'on' if live_cfg['enabled'] else 'off'})")
+    if live_cfg["enabled"] and live_cfg["auto_start"]:
+        engine.start()
+    try:
+        srv.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        engine.stop("GPU Lens is shutting down.")
 
 
 if __name__ == "__main__":
