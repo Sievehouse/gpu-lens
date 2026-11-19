@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 The GPU Lens Authors
+
 package config
 
 import (
@@ -224,8 +227,8 @@ func (c Config) Validate() error {
 		if !c.Live.Enabled {
 			return errors.New("config: source.mode 'live' requires the live console to be enabled")
 		}
-		if !c.Live.NvidiaSMIEnabled && !c.Live.DCGM.Enabled && !c.Live.Prometheus.Enabled && !c.Live.Kubernetes.Enabled {
-			return errors.New("config: live mode requires at least one telemetry source (nvidia-smi, DCGM exporter, Prometheus, or Kubernetes) to be enabled")
+		if !c.Live.NvidiaSMIEnabled && !c.Live.AMDSMIEnabled && !c.Live.DCGM.Enabled && !c.Live.Prometheus.Enabled && !c.Live.Kubernetes.Enabled {
+			return errors.New("config: live mode requires at least one telemetry source (nvidia-smi, amd-smi, DCGM exporter, Prometheus, or Kubernetes) to be enabled")
 		}
 	}
 	return nil
