@@ -1,0 +1,56 @@
+name: Bug report
+description: Something in GPU Lens is wrong or broken
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! For a **security vulnerability**, do not use this form — use GitHub private vulnerability reporting (Security tab → Report a vulnerability).
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What did you see, and what did you expect instead?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Start GPU Lens with …
+        2. Open …
+        3. See …
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: GPU Lens version and runtime
+      description: Shown in the console's top bar, or `gpulens -version`.
+      placeholder: go v0.3.0 / python v0.3.0
+    validations:
+      required: true
+  - type: dropdown
+    id: where
+    attributes:
+      label: Where does it run?
+      multiple: true
+      options:
+        - Laptop / workstation with an NVIDIA GPU
+        - GPU server (bare metal)
+        - Kubernetes (Helm)
+        - Kubernetes (own manifests)
+        - Docker
+        - AMD GPUs (amd-smi)
+        - Live Lab / simulation only
+  - type: textarea
+    id: env
+    attributes:
+      label: Environment
+      description: GPU model(s), driver version, OS, DCGM exporter / Prometheus / Kubernetes versions, and how GPU Lens was started (remove secrets).
+  - type: textarea
+    id: preflight
+    attributes:
+      label: Check Everything output
+      description: A screenshot of the Check Everything tab, or the JSON from Export, helps a lot.
