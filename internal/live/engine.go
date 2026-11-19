@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 The GPU Lens Authors
+
 package live
 
 import (
@@ -11,10 +14,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gpulens/gpu-lens/internal/config"
-	"github.com/gpulens/gpu-lens/internal/domain"
-	"github.com/gpulens/gpu-lens/internal/rules"
-	"github.com/gpulens/gpu-lens/internal/source"
+	"github.com/Sievehouse/gpu-lens/internal/alert"
+	"github.com/Sievehouse/gpu-lens/internal/config"
+	"github.com/Sievehouse/gpu-lens/internal/domain"
+	"github.com/Sievehouse/gpu-lens/internal/rules"
+	"github.com/Sievehouse/gpu-lens/internal/source"
 )
 
 const (
@@ -39,6 +43,7 @@ type sourceState struct {
 	buildError    string
 
 	smi      *source.NvidiaSMIResult
+	amd      *source.NvidiaSMIResult
 	dcgm     *source.DCGMScrape
 	dcgmNorm *source.LiveNormalizeResult
 	prom     *source.PromLiveResult
@@ -53,6 +58,7 @@ type outcome struct {
 	err        error
 	notFound   bool
 	smi        *source.NvidiaSMIResult
+	amd        *source.NvidiaSMIResult
 	dcgm       *source.DCGMScrape
 	prom       *source.PromLiveResult
 	promAudit  bool
@@ -76,6 +82,7 @@ type Engine struct {
 
 	hostSrc *source.HostSource
 	smiSrc  *source.NvidiaSMISource
+	amdSrc  *source.AMDSMISource
 	dcgmSrc *source.DCGMExporterSource
 	promSrc *source.PrometheusSource
 	k8sSrc  *source.KubernetesSource
@@ -123,6 +130,15 @@ type Engine struct {
 	merge        mergeFacts
 	exported     map[string]bool
 	sessionNotes []string
+
+	// alerting and durable state (extras.go)
+	alerts            *alert.Notifier
+	statePath         string
+	stateLoadedAt     time.Time
+	stateSavedAt      time.Time
+	stateErr          string
+	restoredResolved  []ResolvedIncident
+	restoredFirstSeen map[string]time.Time
 }
 
 type backfillState struct {
@@ -198,6 +214,18 @@ func (e *Engine) rebuildSourcesLocked() {
 		e.smiSrc = source.NewNvidiaSMISource(e.cfg.NvidiaSMIPath, 8*time.Second, nil)
 	}
 
+	e.amdSrc = nil
+	amdEndpoint := "local amd-smi (auto-discovered)"
+	if e.cfg.AMDSMIPath != "" {
+		amdEndpoint = "local " + e.cfg.AMDSMIPath
+	}
+	mk(SourceAMDSMI, "Local AMD driver (amd-smi, experimental)", "amd_smi", amdEndpoint,
+		"Four fixed read-only JSON queries (list, static, metric, process); no shell, no state-changing options.",
+		e.cfg.AMDSMIEnabled, e.cfg.AMDSMIPath != "")
+	if e.cfg.AMDSMIEnabled {
+		e.amdSrc = source.NewAMDSMISource(e.cfg.AMDSMIPath, 8*time.Second, nil)
+	}
+
 	const httpReadOnly = "GET/HEAD only — mutating verbs are rejected at the transport before any network I/O."
 
 	e.dcgmSrc = nil
@@ -247,7 +275,8 @@ func (e *Engine) resetSessionLocked() {
 	e.seq = 0
 	e.activity = nil
 	e.open = map[string]domain.Incident{}
-	e.resolved = nil
+	e.resolved = e.restoredResolved
+	e.restoredResolved = nil
 	e.prev = diffState{}
 	e.backfill = backfillState{}
 	e.merge = mergeFacts{}
@@ -452,6 +481,13 @@ func (e *Engine) runTick(ctx context.Context, gen int) {
 		launch(SourceNvidiaSMI, func() outcome {
 			res, err := smi.Collect(ctx, mapping)
 			return outcome{smi: res, err: err, notFound: errors.Is(err, source.ErrNvidiaSMINotFound)}
+		})
+	}
+	if e.amdSrc != nil {
+		amd := e.amdSrc
+		launch(SourceAMDSMI, func() outcome {
+			res, err := amd.Collect(ctx, mapping)
+			return outcome{amd: res, err: err, notFound: errors.Is(err, source.ErrAMDSMINotFound)}
 		})
 	}
 	if st := e.src[SourceDCGM]; st != nil && st.status.Enabled {
@@ -670,6 +706,7 @@ type ConfigPatch struct {
 	ClusterName      *string      `json:"cluster_name"`
 	IntervalSeconds  *float64     `json:"interval_seconds"`
 	NvidiaSMIEnabled *bool        `json:"nvidia_smi_enabled"`
+	AMDSMIEnabled    *bool        `json:"amd_smi_enabled"`
 	HostVitals       *bool        `json:"host_vitals_enabled"`
 	DCGM             *SourcePatch `json:"dcgm_exporter"`
 	Prometheus       *SourcePatch `json:"prometheus"`
@@ -722,6 +759,9 @@ func (e *Engine) UpdateConfig(p ConfigPatch) error {
 	if p.NvidiaSMIEnabled != nil {
 		next.NvidiaSMIEnabled = *p.NvidiaSMIEnabled
 	}
+	if p.AMDSMIEnabled != nil {
+		next.AMDSMIEnabled = *p.AMDSMIEnabled
+	}
 	if p.HostVitals != nil {
 		next.HostVitals = *p.HostVitals
 	}
@@ -755,7 +795,7 @@ func (e *Engine) UpdateConfig(p ConfigPatch) error {
 }
 
 func sameSourcesConfig(a, b config.LiveConfig) bool {
-	return a.ClusterName == b.ClusterName && a.NvidiaSMIEnabled == b.NvidiaSMIEnabled && a.HostVitals == b.HostVitals &&
+	return a.ClusterName == b.ClusterName && a.NvidiaSMIEnabled == b.NvidiaSMIEnabled && a.AMDSMIEnabled == b.AMDSMIEnabled && a.HostVitals == b.HostVitals &&
 		a.DCGM == b.DCGM && a.Prometheus == b.Prometheus && a.Kubernetes == b.Kubernetes
 }
 
