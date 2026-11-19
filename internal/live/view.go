@@ -1,18 +1,27 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 The GPU Lens Authors
+
 package live
 
 import (
 	"sort"
 	"time"
 
-	"github.com/gpulens/gpu-lens/internal/config"
-	"github.com/gpulens/gpu-lens/internal/domain"
-	"github.com/gpulens/gpu-lens/internal/source"
+	"github.com/Sievehouse/gpu-lens/internal/config"
+	"github.com/Sievehouse/gpu-lens/internal/domain"
+	"github.com/Sievehouse/gpu-lens/internal/source"
 )
 
 // Access describes what the caller of the live API may change.
 type Access struct {
 	ConfigMutable bool
 	Reason        string
+	// Role is "admin" or "viewer". Without authentication configured every caller is "admin".
+	Role        string
+	AuthEnabled bool
+	User        string
+	// CanOperate is false for viewers: they may watch, not change thresholds, connections or collection.
+	CanOperate bool
 }
 
 func (e *Engine) statusLocked(now time.Time, access Access) Status {
@@ -30,6 +39,13 @@ func (e *Engine) statusLocked(now time.Time, access Access) Status {
 		ConfigMutableReason: access.Reason,
 		AutoStart:           e.cfg.AutoStart,
 		Hostname:            e.hostname,
+		Role:                access.Role,
+		AuthEnabled:         access.AuthEnabled,
+		User:                access.User,
+		CanOperate:          access.CanOperate,
+	}
+	if st.Role == "" {
+		st.Role = "admin"
 	}
 	if !e.cfg.Enabled {
 		st.UnsupportedReason = ErrLiveDisabled.Error()
@@ -87,6 +103,8 @@ func (e *Engine) State(historySince, activitySince int, access Access) State {
 		ThresholdDefaults: config.ThresholdsToMap(e.base.Thresholds),
 		Rules:             e.rules.Definitions(e.thresholds),
 		Notes:             []string{},
+		Alerts:            e.alerts.Status(),
+		Persistence:       e.persistenceStatusLocked(),
 	}
 	if out.GPUs == nil {
 		out.GPUs = []GPUView{}
@@ -100,7 +118,7 @@ func (e *Engine) State(historySince, activitySince int, access Access) State {
 	if out.Pods == nil {
 		out.Pods = []domain.WorkloadPod{}
 	}
-	for _, id := range []string{SourceNvidiaSMI, SourceDCGM, SourcePrometheus, SourceKubernetes, SourceHost} {
+	for _, id := range []string{SourceNvidiaSMI, SourceAMDSMI, SourceDCGM, SourcePrometheus, SourceKubernetes, SourceHost} {
 		if st := e.src[id]; st != nil {
 			s := st.status
 			s.Facts = append([]Fact{}, st.status.Facts...)
