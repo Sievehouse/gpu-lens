@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 The GPU Lens Authors
+
 package config
 
 import (
@@ -47,6 +50,8 @@ type LiveConfig struct {
 
 	NvidiaSMIEnabled bool   `json:"nvidia_smi_enabled"`
 	NvidiaSMIPath    string `json:"nvidia_smi_path"`
+	AMDSMIEnabled    bool   `json:"amd_smi_enabled"`
+	AMDSMIPath       string `json:"amd_smi_path"`
 	HostVitals       bool   `json:"host_vitals_enabled"`
 
 	DCGM       LiveSourceConfig `json:"dcgm_exporter"`
@@ -66,6 +71,7 @@ func DefaultLiveConfig() LiveConfig {
 		IdleTimeoutSeconds:        900,
 		HistoryPoints:             900,
 		NvidiaSMIEnabled:          true,
+		AMDSMIEnabled:             true,
 		HostVitals:                true,
 		DCGM:                      LiveSourceConfig{Enabled: true, Endpoint: DefaultDCGMExporterEndpoint},
 		Prometheus:                LiveSourceConfig{Enabled: true, Endpoint: DefaultPrometheusEndpoint},
@@ -109,6 +115,12 @@ func (c *LiveConfig) ApplyEnv(getenv func(string) string) {
 	}
 	if v := strings.TrimSpace(getenv("GPULENS_NVIDIA_SMI_PATH")); v != "" {
 		c.NvidiaSMIPath = v
+	}
+	if v, ok := envBool(getenv("GPULENS_AMD_SMI")); ok {
+		c.AMDSMIEnabled = v
+	}
+	if v := strings.TrimSpace(getenv("GPULENS_AMD_SMI_PATH")); v != "" {
+		c.AMDSMIPath = v
 	}
 	if v, ok := envBool(getenv("GPULENS_HOST_VITALS")); ok {
 		c.HostVitals = v
@@ -249,6 +261,8 @@ type LiveConfigView struct {
 	ClusterName               string         `json:"cluster_name"`
 	NvidiaSMIEnabled          bool           `json:"nvidia_smi_enabled"`
 	NvidiaSMIPath             string         `json:"nvidia_smi_path"`
+	AMDSMIEnabled             bool           `json:"amd_smi_enabled"`
+	AMDSMIPath                string         `json:"amd_smi_path"`
 	HostVitals                bool           `json:"host_vitals_enabled"`
 	DCGM                      LiveSourceView `json:"dcgm_exporter"`
 	Prometheus                LiveSourceView `json:"prometheus"`
@@ -280,6 +294,8 @@ func (c LiveConfig) View() LiveConfigView {
 		ClusterName:               c.ClusterName,
 		NvidiaSMIEnabled:          c.NvidiaSMIEnabled,
 		NvidiaSMIPath:             c.NvidiaSMIPath,
+		AMDSMIEnabled:             c.AMDSMIEnabled,
+		AMDSMIPath:                c.AMDSMIPath,
 		HostVitals:                c.HostVitals,
 		DCGM:                      c.DCGM.view(),
 		Prometheus:                c.Prometheus.view(),
