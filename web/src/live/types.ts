@@ -22,6 +22,11 @@ export interface LiveStatus {
   auto_start: boolean;
   hostname: string;
   emulated: boolean;
+  // Access control (0.3+). Without authentication every caller is "admin".
+  role?: 'admin' | 'viewer';
+  auth_enabled?: boolean;
+  user?: string;
+  can_operate?: boolean;
 }
 
 export interface LiveSourceConfig {
@@ -43,6 +48,8 @@ export interface LiveConfigView {
   cluster_name: string;
   nvidia_smi_enabled: boolean;
   nvidia_smi_path: string;
+  amd_smi_enabled?: boolean;
+  amd_smi_path?: string;
   host_vitals_enabled: boolean;
   dcgm_exporter: LiveSourceConfig;
   prometheus: LiveSourceConfig;
@@ -152,6 +159,7 @@ export interface LiveGPU {
   first_seen_at: string;
   incident_ids: string[];
   worst_severity: string;
+  exported_metrics?: string[];
 }
 
 export interface HistoryPoint {
@@ -244,4 +252,77 @@ export interface LiveState {
   rules: any[];
   sources_detail: any | null;
   notes: string[];
+  alerts?: AlertStatus;
+  persistence?: PersistenceStatus;
+}
+
+export interface AlertDestination {
+  kind: 'slack' | 'webhook';
+  target: string;
+  signed: boolean;
+  sent: number;
+  failed: number;
+  dropped: number;
+  last_event: string;
+  last_attempt_at: string | null;
+  last_success_at: string | null;
+  last_error: string;
+}
+
+export interface AlertStatus {
+  enabled: boolean;
+  min_severity: string;
+  public_url: string;
+  tracked_incidents: number;
+  destinations: AlertDestination[];
+  note: string;
+}
+
+export interface PersistenceStatus {
+  enabled: boolean;
+  path: string;
+  loaded_at: string | null;
+  saved_at: string | null;
+  last_error: string;
+  note: string;
+}
+
+export interface FleetSummary {
+  cluster: string;
+  hostname: string;
+  version: string;
+  runtime: string;
+  state: string;
+  verdict: string;
+  verdict_text: string;
+  fleet_status: string;
+  data_mode: string;
+  emulated: boolean;
+  gpus_total: number;
+  gpus_fresh: number;
+  nodes: number;
+  incidents: Record<string, number>;
+  top_incidents: string[];
+  sources_connected: number;
+  sources_enabled: number;
+  last_cycle_at: string | null;
+}
+
+export interface FleetMember {
+  name: string;
+  kind: 'local' | 'peer';
+  url: string;
+  reachable: boolean;
+  error: string;
+  last_ok_at: string | null;
+  latency_ms: number;
+  summary: FleetSummary | null;
+}
+
+export interface FleetView {
+  enabled: boolean;
+  interval_seconds: number;
+  members: FleetMember[];
+  totals: { members: number; reachable: number; gpus_total: number; gpus_fresh: number; critical: number; warning: number; info: number; unhealthy: number; sources_connected: number };
+  note: string;
 }
