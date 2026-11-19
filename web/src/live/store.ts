@@ -1,7 +1,7 @@
 // Polling store for the live console. Lives outside the component tree so that polling survives re-renders;
 // components read `live` and call `requestRender` through the helpers below.
 import { requestRender } from '../jsx-runtime';
-import { ActivityEntry, HistoryPoint, LiveState } from './types';
+import { ActivityEntry, FleetView, HistoryPoint, LiveState } from './types';
 import * as api from './api';
 
 export interface LiveStore {
@@ -16,6 +16,9 @@ export interface LiveStore {
   lastFetchAt: number;
   fetchCount: number;
   paused: boolean; // the user stopped collection from the console
+  fleet: FleetView | null;
+  fleetAt: number;
+  fleetFocus: boolean; // the Fleet tab is open: refresh it more often
 }
 
 export const live: LiveStore = {
@@ -30,6 +33,9 @@ export const live: LiveStore = {
   lastFetchAt: 0,
   fetchCount: 0,
   paused: false,
+  fleet: null,
+  fleetAt: 0,
+  fleetFocus: false,
 };
 
 const MAX_ACTIVITY = 500;
@@ -81,6 +87,14 @@ export async function refresh(): Promise<void> {
     live.lastFetchAt = Date.now();
     live.fetchCount++;
     consecutiveErrors = 0;
+    if (Date.now() - live.fleetAt > (live.fleetFocus ? 3000 : 15000)) {
+      live.fleetAt = Date.now();
+      try {
+        live.fleet = await api.fetchFleet();
+      } catch {
+        /* the fleet view is optional */
+      }
+    }
   } catch (err: any) {
     consecutiveErrors++;
     live.error = err?.message || 'Could not reach the GPU Lens backend.';
@@ -189,4 +203,23 @@ export function exportSnapshot(): string {
     null,
     2
   );
+}
+
+export async function testAlerts(): Promise<void> {
+  live.busy = 'alerts';
+  live.notice = '';
+  requestRender();
+  try {
+    const res = await api.testAlerts();
+    const ok = res.results.filter((r) => r.ok).length;
+    const failed = res.results.filter((r) => !r.ok).map((r) => `${r.kind}: ${r.error}`);
+    if (live.state) live.state = { ...live.state, alerts: res.status };
+    if (failed.length) live.error = `Test alert: ${ok} of ${res.results.length} destination(s) accepted it. ${failed.join('; ')}`;
+    else live.notice = `Test alert delivered to ${ok} destination(s).`;
+  } catch (err: any) {
+    live.error = err?.message || 'Test alert failed.';
+  } finally {
+    live.busy = '';
+    requestRender();
+  }
 }
