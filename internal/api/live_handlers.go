@@ -1,17 +1,24 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 The GPU Lens Authors
+
 package api
 
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 
-	"github.com/gpulens/gpu-lens/internal/live"
+	"github.com/Sievehouse/gpu-lens/internal/audit"
+	"github.com/Sievehouse/gpu-lens/internal/fleet"
+	"github.com/Sievehouse/gpu-lens/internal/live"
 )
 
 const livePathPrefix = "/api/v1/live/"
@@ -26,6 +33,36 @@ func (s *Server) SetLiveEngine(engine *live.Engine) {
 	s.mux.HandleFunc("/api/v1/live/recheck", s.handleLiveRecheck)
 	s.mux.HandleFunc("/api/v1/live/config", s.handleLiveConfig)
 	s.mux.HandleFunc("/api/v1/live/thresholds", s.handleLiveThresholds)
+	s.mux.HandleFunc("/api/v1/live/alerts", s.handleLiveAlerts)
+	s.mux.HandleFunc("/api/v1/live/alerts/test", s.handleLiveAlertsTest)
+	s.mux.HandleFunc("/api/v1/live/summary", s.handleLiveSummary)
+}
+
+// SetFleet attaches the multi-cluster hub behind GET /api/v1/fleet.
+func (s *Server) SetFleet(h *fleet.Hub) {
+	s.fleet = h
+	s.mux.HandleFunc("/api/v1/fleet", s.handleFleet)
+}
+
+func (s *Server) handleLiveSummary(w http.ResponseWriter, r *http.Request) {
+	if !s.guardLive(w, r, http.MethodGet) {
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, s.live.Summary())
+}
+
+func (s *Server) handleFleet(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if !sameOrigin(r) {
+		writeError(w, http.StatusForbidden, "fleet API refused: cross-site requests are not allowed")
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, s.fleet.View())
 }
 
 func isLivePath(path string) bool {
@@ -113,16 +150,32 @@ func (s *Server) guardLive(w http.ResponseWriter, r *http.Request, method string
 
 // liveAccess decides whether this caller may change connection settings (endpoints and tokens).
 func (s *Server) liveAccess(r *http.Request) live.Access {
-	if s.live.AllowRemoteConfig() {
-		return live.Access{ConfigMutable: true}
+	p := principalOf(r)
+	base := live.Access{Role: p.role, AuthEnabled: s.auth.Enabled(), CanOperate: p.role == RoleAdmin}
+	if s.auth.Enabled() {
+		base.User = p.user
 	}
-	if remoteIsLoopback(r) && !forwardedByProxy(r) && hostHeaderIsLocal(r) {
-		return live.Access{ConfigMutable: true}
+	if p.role != RoleAdmin {
+		base.Reason = "You are signed in with the viewer role, which is read-only. Sign in as an admin to change connections, thresholds or collection."
+		return base
 	}
-	return live.Access{
-		ConfigMutable: false,
-		Reason:        "Connection settings can only be changed from the machine running GPU Lens (open it at http://localhost there), or with GPULENS_* environment variables at startup. Start with -live-allow-remote-config to lift this.",
+	if s.live.AllowRemoteConfig() || (remoteIsLoopback(r) && !forwardedByProxy(r) && hostHeaderIsLocal(r)) {
+		base.ConfigMutable = true
+		return base
 	}
+	base.Reason = "Connection settings can only be changed from the machine running GPU Lens (open it at http://localhost there), or with GPULENS_* environment variables at startup. Start with -live-allow-remote-config to lift this."
+	return base
+}
+
+// liveDone records a successful live change in the audit log and the console activity log, and persists state.
+func (s *Server) liveDone(r *http.Request, action, title, detail string) {
+	e := s.record(r, action, detail, audit.OutcomeOK)
+	who := e.Actor
+	if e.Role != "" {
+		who += " (" + e.Role + ")"
+	}
+	s.live.AddAudit(title, detail+" — by "+who+" from "+e.Remote+".")
+	_ = s.live.SaveState()
 }
 
 func (s *Server) writeLiveState(w http.ResponseWriter, r *http.Request) {
@@ -185,6 +238,11 @@ func (s *Server) handleLiveStart(w http.ResponseWriter, r *http.Request) {
 	if !decodeLiveBody(w, r, &body) {
 		return
 	}
+	if body.IntervalSeconds > 0 && !s.requireAdmin(w, r, "live.start") {
+		// Viewers may resume watching, but not change the refresh interval.
+		return
+	}
+	wasRunning := s.live.Running()
 	if err := s.live.Start(body.IntervalSeconds); err != nil {
 		status := http.StatusBadRequest
 		if errors.Is(err, live.ErrLiveDisabled) {
@@ -193,27 +251,32 @@ func (s *Server) handleLiveStart(w http.ResponseWriter, r *http.Request) {
 		writeError(w, status, err.Error())
 		return
 	}
+	if !wasRunning {
+		s.record(r, "live.start", "Live collection started.", audit.OutcomeOK)
+	}
 	s.writeLiveState(w, r)
 }
 
 func (s *Server) handleLiveStop(w http.ResponseWriter, r *http.Request) {
-	if !s.guardLive(w, r, http.MethodPost) {
+	if !s.guardLive(w, r, http.MethodPost) || !s.requireAdmin(w, r, "live.stop") {
 		return
 	}
 	s.live.Stop("Stopped from the console.")
+	s.liveDone(r, "live.stop", "Collection paused", "Live collection stopped from the console")
 	s.writeLiveState(w, r)
 }
 
 func (s *Server) handleLiveRecheck(w http.ResponseWriter, r *http.Request) {
-	if !s.guardLive(w, r, http.MethodPost) {
+	if !s.guardLive(w, r, http.MethodPost) || !s.requireAdmin(w, r, "live.recheck") {
 		return
 	}
 	s.live.Recheck()
+	s.record(r, "live.recheck", "Immediate re-check of every source.", audit.OutcomeOK)
 	s.writeLiveState(w, r)
 }
 
 func (s *Server) handleLiveConfig(w http.ResponseWriter, r *http.Request) {
-	if !s.guardLive(w, r, http.MethodPost) {
+	if !s.guardLive(w, r, http.MethodPost) || !s.requireAdmin(w, r, "live.config") {
 		return
 	}
 	access := s.liveAccess(r)
@@ -224,6 +287,7 @@ func (s *Server) handleLiveConfig(w http.ResponseWriter, r *http.Request) {
 	touchesConnections := patch.ClusterName != nil || patch.NvidiaSMIEnabled != nil || patch.HostVitals != nil ||
 		patch.DCGM != nil || patch.Prometheus != nil || patch.Kubernetes != nil
 	if touchesConnections && !access.ConfigMutable {
+		s.record(r, "live.config", "refused: "+describePatch(patch), audit.OutcomeDenied)
 		writeError(w, http.StatusForbidden, access.Reason)
 		return
 	}
@@ -232,14 +296,68 @@ func (s *Server) handleLiveConfig(w http.ResponseWriter, r *http.Request) {
 		if errors.Is(err, live.ErrLiveDisabled) {
 			status = http.StatusConflict
 		}
+		s.record(r, "live.config", "rejected: "+describePatch(patch)+": "+err.Error(), audit.OutcomeError)
 		writeError(w, status, err.Error())
 		return
 	}
+	s.liveDone(r, "live.config", "Live configuration changed", describePatch(patch))
 	s.writeLiveState(w, r)
 }
 
+// describePatch summarizes a configuration change for the audit log. Token values are never included.
+func describePatch(p live.ConfigPatch) string {
+	var parts []string
+	if p.ClusterName != nil {
+		parts = append(parts, fmt.Sprintf("cluster name=%q", *p.ClusterName))
+	}
+	if p.IntervalSeconds != nil {
+		parts = append(parts, fmt.Sprintf("interval=%gs", *p.IntervalSeconds))
+	}
+	if p.NvidiaSMIEnabled != nil {
+		parts = append(parts, fmt.Sprintf("nvidia-smi=%t", *p.NvidiaSMIEnabled))
+	}
+	if p.HostVitals != nil {
+		parts = append(parts, fmt.Sprintf("host vitals=%t", *p.HostVitals))
+	}
+	for _, sp := range []struct {
+		name string
+		p    *live.SourcePatch
+	}{{"DCGM", p.DCGM}, {"Prometheus", p.Prometheus}, {"Kubernetes", p.Kubernetes}} {
+		if sp.p == nil {
+			continue
+		}
+		var bits []string
+		if sp.p.Enabled != nil {
+			bits = append(bits, fmt.Sprintf("enabled=%t", *sp.p.Enabled))
+		}
+		if sp.p.Endpoint != nil {
+			ep := strings.TrimSpace(*sp.p.Endpoint)
+			if ep == "" {
+				ep = "(default probe)"
+			} else if u, err := url.Parse(ep); err == nil && u.User != nil {
+				u.User = nil
+				ep = u.String()
+			}
+			bits = append(bits, "endpoint="+ep)
+		}
+		if sp.p.BearerToken != nil && strings.TrimSpace(*sp.p.BearerToken) != "" {
+			bits = append(bits, "token set")
+		}
+		if sp.p.ClearToken {
+			bits = append(bits, "token cleared")
+		}
+		if len(bits) > 0 {
+			parts = append(parts, sp.name+" ("+strings.Join(bits, ", ")+")")
+		}
+	}
+	if len(parts) == 0 {
+		return "no changes"
+	}
+	return strings.Join(parts, "; ")
+}
+
 func (s *Server) handleLiveThresholds(w http.ResponseWriter, r *http.Request) {
-	if !s.guardLive(w, r, http.MethodPost) {
+	if !s.guardLive(w, r, http.MethodPost) || !s.requireAdmin(w, r, "live.thresholds") {
 		return
 	}
 	var body struct {
@@ -249,13 +367,54 @@ func (s *Server) handleLiveThresholds(w http.ResponseWriter, r *http.Request) {
 	if !decodeLiveBody(w, r, &body) {
 		return
 	}
+	keys := make([]string, 0, len(body.Overrides))
+	for k, v := range body.Overrides {
+		keys = append(keys, fmt.Sprintf("%s=%g", k, v))
+	}
+	sort.Strings(keys)
+	detail := "set " + strings.Join(keys, ", ")
+	if body.Reset {
+		detail = "reset all live thresholds to defaults"
+		if len(keys) > 0 {
+			detail += ", then set " + strings.Join(keys, ", ")
+		}
+	}
 	if err := s.live.SetThresholds(body.Overrides, body.Reset); err != nil {
 		status := http.StatusBadRequest
 		if errors.Is(err, live.ErrLiveDisabled) {
 			status = http.StatusConflict
 		}
+		s.record(r, "live.thresholds", "rejected: "+detail+": "+err.Error(), audit.OutcomeError)
 		writeError(w, status, err.Error())
 		return
 	}
+	s.liveDone(r, "live.thresholds", "Thresholds changed", detail)
 	s.writeLiveState(w, r)
+}
+
+func (s *Server) handleLiveAlerts(w http.ResponseWriter, r *http.Request) {
+	if !s.guardLive(w, r, http.MethodGet) {
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, s.live.AlertStatus())
+}
+
+func (s *Server) handleLiveAlertsTest(w http.ResponseWriter, r *http.Request) {
+	if !s.guardLive(w, r, http.MethodPost) || !s.requireAdmin(w, r, "alerts.test") {
+		return
+	}
+	res, err := s.live.TestAlerts()
+	if err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	ok := 0
+	for _, x := range res {
+		if x.OK {
+			ok++
+		}
+	}
+	s.record(r, "alerts.test", fmt.Sprintf("test alert accepted by %d of %d destination(s)", ok, len(res)), audit.OutcomeOK)
+	writeJSON(w, http.StatusOK, map[string]interface{}{"results": res, "status": s.live.AlertStatus()})
 }
