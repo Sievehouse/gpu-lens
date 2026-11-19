@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """
 Black-box test of the live API ("Go Live") against a real GPU Lens process — the Go binary or the Python runtime.
 
@@ -265,6 +266,189 @@ def scenario_lab(kind):
         lab.wait(5)
 
 
+# ---------------------------------------------------------------------------------------------
+# 0.3 features: access control, audit, alerting, self-metrics, AMD, durable state, fleet
+# ---------------------------------------------------------------------------------------------
+import base64
+import hashlib
+import hmac
+import http.server
+import threading
+
+FAKE_AMD = os.path.join(ROOT, "tests", "fixtures", "fake-amd-smi")
+
+
+def basic(user, pw):
+    return {"Authorization": "Basic " + base64.b64encode(f"{user}:{pw}".encode()).decode()}
+
+
+def raw_get(base, path, headers=None):
+    req = urllib.request.Request(base + path, headers=headers or {})
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            return r.status, r.read().decode("utf-8", "replace"), {k.lower(): v for k, v in r.headers.items()}
+    except urllib.error.HTTPError as e:
+        return e.code, e.read().decode("utf-8", "replace"), {k.lower(): v for k, v in e.headers.items()}
+
+
+def scenario_auth_audit(kind):
+    print(f"[{kind}] access control, roles and audit log")
+    tmp = tempfile.mkdtemp(prefix="gpulens-audit-")
+    audit_file = os.path.join(tmp, "audit.jsonl")
+    s = Server(kind, ["--basic-auth-user", "admin", "--basic-auth-pass", "admin-pass-1", "--viewer-user", "viewer", "--viewer-pass", "viewer-pass-1",
+                      "--no-nvidia-smi", "--no-amd-smi", "--no-host-vitals", "--audit-log-file", audit_file])
+    admin, viewer = basic("admin", "admin-pass-1"), basic("viewer", "viewer-pass-1")
+    try:
+        for path in ("/", "/api/v1/overview", "/api/v1/live/state", "/metrics", "/api/v1/audit"):
+            code, _, hdrs = raw_get(s.base, path)
+            check(code == 401 and "Basic" in hdrs.get("www-authenticate", ""), f"{path} requires credentials (got {code})")
+        check(raw_get(s.base, "/healthz")[0] == 200, "/healthz stays public for probes")
+        check(raw_get(s.base, "/api/v1/overview", basic("admin", "nope"))[0] == 401, "wrong password refused")
+        code, st = call(s.base, "GET", "/api/v1/live/status", headers=viewer)
+        check(code == 200 and st.get("role") == "viewer" and st.get("can_operate") is False and st.get("config_mutable") is False, f"viewer status {st}")
+        code, st = call(s.base, "POST", "/api/v1/live/thresholds", {"overrides": {"temp_warning_celsius": 75}}, viewer)
+        check(code == 403 and "viewer" in st.get("error", ""), f"viewer cannot change thresholds ({code})")
+        for name in ("stop", "recheck", "alerts/test"):
+            check(call(s.base, "POST", "/api/v1/live/" + name, {}, viewer)[0] == 403, f"viewer cannot {name}")
+        check(call(s.base, "POST", "/api/v1/live/start", {}, viewer)[0] == 200, "viewer may resume watching")
+        code, st = call(s.base, "POST", "/api/v1/live/thresholds", {"overrides": {"temp_warning_celsius": 75}}, admin)
+        check(code == 200 and st["thresholds"]["temp_warning_celsius"] == 75, "admin changes thresholds")
+        check(any(a["kind"] == "audit" for a in st["activity"]), "the change shows in the activity log")
+        call(s.base, "POST", "/api/v1/live/config", {"prometheus": {"endpoint": "http://127.0.0.1:1", "bearer_token": "TOPSECRET-1"}}, admin)
+        call(s.base, "GET", "/api/v1/overview?scenario=scenario-3-gpu-health-warning", headers=viewer)
+        code, au = call(s.base, "GET", "/api/v1/audit", headers=viewer)
+        acts = [(e["action"], e["actor"], e["outcome"]) for e in au.get("entries", [])]
+        check(("live.thresholds", "viewer", "denied") in acts, f"denied attempt audited: {acts}")
+        check(("live.thresholds", "admin", "ok") in acts, "admin change audited")
+        check(("simulation.scenario.select", "viewer", "ok") in acts, "scenario switch audited")
+        check(au.get("persistent") is True, "audit endpoint reports the file")
+        with open(audit_file) as f:
+            body = f.read()
+        check("TOPSECRET-1" not in body and "token set" in body, "tokens never reach the audit file")
+        check(len(body.strip().splitlines()) == len(au["entries"]), "audit file matches the API")
+    finally:
+        s.close()
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+class Receiver:
+    def __init__(self):
+        self.events, self.headers = [], []
+        outer = self
+
+        class H(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def do_POST(self):
+                n = int(self.headers.get("Content-Length") or 0)
+                body = self.rfile.read(n)
+                outer.events.append(body)
+                outer.headers.append({k.lower(): v for k, v in self.headers.items()})
+                self.send_response(200)
+                self.end_headers()
+
+        self.srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+        self.url = f"http://127.0.0.1:{self.srv.server_address[1]}/hook"
+        threading.Thread(target=self.srv.serve_forever, daemon=True).start()
+
+    def types(self):
+        return [json.loads(b)["type"] for b in self.events]
+
+    def close(self):
+        self.srv.shutdown()
+
+
+def scenario_alerts_metrics(kind):
+    print(f"[{kind}] alerting (generic webhook) and /metrics")
+    rx = Receiver()
+    s = Server(kind, ["--mode", "live", "--nvidia-smi-path", FAKE_SMI, "--no-amd-smi", "--no-host-vitals", "--live-interval", "1",
+                      "--alert-webhook-url", rx.url, "--alert-webhook-secret", "hook-secret", "--public-url", "https://gpulens.example.com"],
+               {"FAKE_SMI_TEMP0": "95"})
+    try:
+        end = time.time() + 20
+        while time.time() < end and "incident.opened" not in rx.types():
+            time.sleep(0.3)
+        check("incident.opened" in rx.types(), f"an incident.opened alert is delivered (got {rx.types()})")
+        if rx.events:
+            ev = json.loads(rx.events[0])
+            check(ev.get("schema") == "gpulens.alert/v1" and ev.get("console_url", "").startswith("https://gpulens.example.com/"), "alert payload schema and link")
+            sig = rx.headers[0].get("x-gpulens-signature-256", "")
+            check(sig == "sha256=" + hmac.new(b"hook-secret", rx.events[0], hashlib.sha256).hexdigest(), "HMAC signature verifies")
+        n_before = len(rx.events)
+        code, res = s.post("alerts/test")
+        check(code == 200 and res["results"][0]["ok"] is True, f"test alert accepted ({code})")
+        check(len(rx.events) == n_before + 1 and json.loads(rx.events[-1])["type"] == "test", "test alert arrives")
+        st = s.state()
+        check(st["alerts"]["enabled"] and st["alerts"]["destinations"][0]["sent"] >= 2 and "hook" not in st["alerts"]["destinations"][0]["target"],
+              "alert status counts deliveries and hides the URL path")
+        code, text, hdrs = raw_get(s.base, "/metrics")
+        check(code == 200 and hdrs.get("content-type", "").startswith("text/plain"), "/metrics is Prometheus text")
+        for want in ("gpulens_build_info{", "gpulens_live_running 1", 'gpulens_live_source_up{source="nvidia_smi",state="connected"} 1',
+                     'gpulens_alerts_sent_total{destination="webhook"}', "gpulens_readonly_guard_ok 1"):
+            check(want in text, f"/metrics has {want}")
+        crit = [l for l in text.splitlines() if l.startswith('gpulens_live_incidents_open{severity="critical"}') or l.startswith('gpulens_live_incidents_open{severity="warning"}')]
+        check(sum(float(l.split()[-1]) for l in crit) >= 1, "/metrics counts the open incident")
+    finally:
+        s.close()
+        rx.close()
+
+
+def scenario_amd(kind):
+    print(f"[{kind}] AMD GPUs via the amd-smi test double")
+    s = Server(kind, ["--mode", "live", "--no-nvidia-smi", "--amd-smi-path", FAKE_AMD, "--no-host-vitals", "--live-interval", "1"], {"FAKE_AMD_FORMAT": "wrapped"})
+    try:
+        st = s.wait(lambda x: len(x["gpus"]) == 2, 20, "two AMD GPUs")
+        check(all(g["model_name"] == "AMD Instinct MI300X" for g in st["gpus"]), "AMD model names")
+        src = [x for x in st["sources"] if x["id"] == "amd_smi"]
+        check(src and src[0]["state"] == "connected", "amd_smi source connected")
+        c = checks_by_id(st)
+        check(c.get("amd.query", {}).get("status") == "pass" and c.get("amd.coverage", {}).get("status") == "warn", "AMD preflight checks")
+        check(st["gpus"][1]["latest"]["gpu_temp_celsius"] == 39, "hotspot fallback when edge is N/A")
+    finally:
+        s.close()
+
+
+def scenario_persistence_fleet(kind):
+    print(f"[{kind}] durable live state and fleet aggregation")
+    tmp = tempfile.mkdtemp(prefix="gpulens-state-")
+    path = os.path.join(tmp, "live.json")
+    args = ["--no-nvidia-smi", "--no-amd-smi", "--no-host-vitals", "--live-state-file", path]
+    try:
+        s = Server(kind, args)
+        code, _ = s.post("thresholds", {"overrides": {"temp_critical_celsius": 91}})
+        check(code == 200 and os.path.exists(path), "threshold change is saved to the state file")
+        check(oct(os.stat(path).st_mode & 0o777) == "0o600", "state file is private (0600)")
+        s.close()
+        s = Server(kind, args)
+        st = s.state()
+        check(st["thresholds"]["temp_critical_celsius"] == 91 and st["persistence"]["enabled"] and st["persistence"]["loaded_at"], "override restored after restart")
+        peer = Server(kind, ["--mode", "live", "--nvidia-smi-path", FAKE_SMI, "--no-amd-smi", "--no-host-vitals", "--live-interval", "1", "--cluster-name", "gpu-box"])
+        hub = Server(kind, ["--no-nvidia-smi", "--no-amd-smi", "--no-host-vitals", "--peer", f"box={peer.base}", "--peer", "gone=http://127.0.0.1:1",
+                            "--fleet-interval", "1"])
+        try:
+            fv = {}
+            end = time.time() + 20
+            while time.time() < end:
+                fv = call(hub.base, "GET", "/api/v1/fleet")[1]
+                m = {x["name"]: x for x in fv.get("members", [])}
+                if m.get("box", {}).get("reachable") and (m["box"]["summary"] or {}).get("gpus_total", 0) == 2:
+                    break
+                time.sleep(0.5)
+            m = {x["name"]: x for x in fv.get("members", [])}
+            check(fv.get("enabled") and m.get("box", {}).get("reachable"), f"peer reachable from the hub: {m.get('box')}")
+            check((m.get("box", {}).get("summary") or {}).get("cluster") == "gpu-box", "peer summary carries its cluster name")
+            check(m.get("gone", {}).get("reachable") is False and m["gone"]["error"], "unreachable peer reported, not hidden")
+            check(any(x["kind"] == "local" for x in fv.get("members", [])), "hub lists itself")
+            check(fv.get("totals", {}).get("gpus_total", 0) >= 2, "totals add up peer GPUs")
+        finally:
+            hub.close()
+            peer.close()
+            s.close()
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def main():
     which = sys.argv[1] if len(sys.argv) > 1 else "both"
     kinds = ["go", "python"] if which == "both" else [which]
@@ -275,7 +459,8 @@ def main():
         else:
             subprocess.check_call(["go", "build", "-o", os.path.join(ROOT, "bin", "gpulens-test"), "./cmd/gpulens"], cwd=ROOT)
     for kind in kinds:
-        for sc in (scenario_bare, scenario_guards, scenario_fake_smi, scenario_lab):
+        for sc in (scenario_bare, scenario_guards, scenario_fake_smi, scenario_lab, scenario_auth_audit, scenario_alerts_metrics, scenario_amd,
+                   scenario_persistence_fleet):
             try:
                 sc(kind)
             except Exception as e:
