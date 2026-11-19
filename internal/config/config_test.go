@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 The GPU Lens Authors
+
 package config
 
 import (
@@ -66,6 +69,7 @@ func TestConfigValidation(t *testing.T) {
 			mutate: func(c *Config) {
 				c.Source.Mode = "live"
 				c.Live.NvidiaSMIEnabled = false
+				c.Live.AMDSMIEnabled = false
 				c.Live.DCGM.Enabled = false
 				c.Live.Prometheus.Enabled = false
 				c.Live.Kubernetes.Enabled = false
