@@ -24,6 +24,18 @@ services:
       # - GPULENS_KUBERNETES_TOKEN_FILE=/run/secrets/k8s_token
       # - GPULENS_KUBERNETES_CA_FILE=/run/secrets/k8s_ca.crt
       # - GPULENS_CLUSTER_NAME=prod-gpu
+      # Access control, audit, durable state, alerts and fleet (see docs/AUTH.md, docs/ALERTING.md, docs/FLEET.md):
+      # - GPULENS_BASIC_AUTH_USER=admin
+      # - GPULENS_BASIC_AUTH_PASS_FILE=/run/secrets/gpulens_admin
+      # - GPULENS_VIEWER_USER=oncall
+      # - GPULENS_VIEWER_PASS_FILE=/run/secrets/gpulens_viewer
+      # - GPULENS_AUDIT_LOG_FILE=/app/data/audit.jsonl
+      # - GPULENS_LIVE_STATE_FILE=/app/data/live-state.json
+      # - GPULENS_ALERT_SLACK_WEBHOOK_URL=https://hooks.slack.com/services/...
+      # - GPULENS_ALERT_WEBHOOK_URL=https://alerts.example.com/gpulens
+      # - GPULENS_ALERT_WEBHOOK_SECRET_FILE=/run/secrets/gpulens_webhook_secret
+      # - GPULENS_PUBLIC_URL=https://gpulens.example.com
+      # - GPULENS_PEERS=cluster-b=https://gpulens.cluster-b:8080
     # To read the Live Lab emulator running on the Docker host (python3 scripts/live_lab.py --host 0.0.0.0):
     # extra_hosts: ["host.docker.internal:host-gateway"]
     volumes:
