@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 The GPU Lens Authors
+
 package source
 
 import (
@@ -15,8 +18,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gpulens/gpu-lens/internal/config"
-	"github.com/gpulens/gpu-lens/internal/domain"
+	"github.com/Sievehouse/gpu-lens/internal/config"
+	"github.com/Sievehouse/gpu-lens/internal/domain"
 )
 
 // NvidiaSMISource reads GPU telemetry from the NVIDIA driver on the machine GPU Lens itself runs on, by invoking
