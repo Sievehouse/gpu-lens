@@ -1,4 +1,4 @@
-import { LiveState } from './types';
+import { AlertStatus, FleetView, LiveState } from './types';
 
 async function request(method: string, path: string, body?: unknown): Promise<LiveState> {
   const init: RequestInit = { method, headers: { Accept: 'application/json' }, cache: 'no-store' };
@@ -29,3 +29,15 @@ export const recheckLive = () => request('POST', '/api/v1/live/recheck');
 export const saveLiveConfig = (patch: Record<string, unknown>) => request('POST', '/api/v1/live/config', patch);
 export const saveThresholds = (overrides: Record<string, number> | null, reset: boolean) =>
   request('POST', '/api/v1/live/thresholds', reset ? { reset: true } : { overrides: overrides || {} });
+
+export interface AlertTestResult {
+  results: { kind: string; target: string; ok: boolean; error: string }[];
+  status: AlertStatus;
+}
+export const testAlerts = () => request('POST', '/api/v1/live/alerts/test') as unknown as Promise<AlertTestResult>;
+
+export async function fetchFleet(): Promise<FleetView | null> {
+  const resp = await fetch('/api/v1/fleet', { headers: { Accept: 'application/json' }, cache: 'no-store' });
+  if (!resp.ok) return null;
+  return (await resp.json()) as FleetView;
+}
