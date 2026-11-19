@@ -60,7 +60,7 @@ GPU Lens is a self-hosted, strictly read-only diagnostic and capacity intelligen
                                                  |
                                                  v
 +---------------------------------------------------------------------------------------------------+
-|                        Operator Console UI (web/ - React + TypeScript + Vite)                     |
+|                        Operator Console UI (web/ - TypeScript + TSX, own JSX runtime)             |
 |  - Persistent Simulated vs. Live Telemetry Banner & Scenario Switcher                             |
 |  - Views: Overview | Incidents | Incident Detail | Capacity | Data Sources | Rules                |
 |  - Explicit UI states: Loading, Empty, Error, Stale Telemetry, Insufficient Evidence              |
@@ -166,6 +166,30 @@ Go Live adds a second, isolated path next to the fixture demo. The demo (`/api/v
 - **Epistemics preserved.** A GPU with no fresh sample is stale and is excluded from health verdicts and raises `GPU-FRESH-005`. A metric absent from every source is "not exported", never `0`. The low-utilisation window is built from real observation time (`anchorWindow` pins its ends so the capacity calculator and the rule agree) so a freshly-seen workload is not accused of being idle for an hour.
 - **Isolation of the UI.** The launcher is plain DOM outside `#root`; Go Live is the default view and the simulation is `?view=demo`; the root factory swaps `<LiveConsole/>` and `<App/>`. `App.tsx` only gained `export`s. A DOM-snapshot regression (125 states, loaded with `?view=demo`) against the original build proves the simulation is unchanged. The white theme is CSS only (`html[data-theme]`), including attribute-selector overrides for inline-styled text and SVG chart colours, so no markup differs between themes.
 
+### 0.3 additions: operations around the engine
+
+```text
+                     ┌──────────── internal/api ─────────────┐
+ browser / API ──► basic auth (admin | viewer) ─► routes ─► role check ─► audit.Log (memory + JSONL file)
+                     │   security headers, /metrics (own health)          │
+                     └──────────────────────────────────────────────────────┘
+ live.Engine ── each cycle ──► alert.Notifier.Sync(open incidents) ──► queue ──► Slack / signed webhook (startup-only URLs)
+      │                                                                          (retries, no redirects)
+      ├── SaveState every 30 s / on change ──► live-state file (overrides, resolved log, first-seen, alert record)
+      └── Summary() ◄── GET /api/v1/live/summary ◄── fleet.Hub on another instance (GET-only transport)
+ amd-smi ──► source.AMDSMISource ──► same result type as nvidia-smi ──► same merge, rules, preflight
+```
+
+- **`internal/alert`** keeps its own record of announced incidents (fingerprint → severity) and diffs each cycle's
+  open set against it, so restarts never re-announce and warm-up cycles never report false resolutions.
+- **`internal/audit`** is deliberately simple: a bounded ring plus an append-only file, reloaded at startup.
+- **`internal/fleet`** aggregates summaries of other instances; it does not merge their GPUs into one rule run, which
+  keeps every member authoritative for its own incidents and alerts.
+- **AMD** reuses the local-driver path end to end: `amd_smi` is a peer of `nvidia_smi` in source priority, provenance
+  annotation ("read via amd-smi") and preflight.
+- **Version** is a build-time variable (`-ldflags -X …/internal/live.Version=`), set from the git tag by GoReleaser,
+  the Dockerfile `VERSION` argument and `make build`.
+
 ### Python runtime parity
 
 `scripts/gpulens_live.py` is a standard-library port of the engine, used by `scripts/local_runtime_server.py` when Go is not installed. It serves the same routes, guards and JSON shapes (verified by running `tests/live_blackbox.py` against both servers). Differences:
@@ -176,4 +200,5 @@ Go Live adds a second, isolated path next to the fixture demo. The demo (`/api/v
 | Rules / capacity | `internal/rules`, `internal/capacity` | the existing Python mirrors in `local_runtime_server.py` |
 | Concurrency | goroutines, context cancellation | one daemon thread per source call, generation counter to discard stale results |
 | Kubernetes read-only stats | counted by the transport guard | counted by the transport guard |
+| Alerting, audit, roles, /metrics, AMD, durable state, fleet | `internal/alert`, `internal/audit`, `internal/api`, `internal/source`, `internal/live`, `internal/fleet` | the same features in `gpulens_live.py` and `local_runtime_server.py`; the black-box suite checks both |
 
