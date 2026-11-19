@@ -1,0 +1,133 @@
+# GPU Lens Helm values. Everything GPU Lens reads is read-only; the only write it can make is alert delivery
+# to the destinations below.
+
+image:
+  repository: ghcr.io/sievehouse/gpu-lens
+  # Defaults to the chart appVersion.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+# One instance per cluster. Durable state is a single file, so do not scale this above 1.
+replicaCount: 1
+
+# live: start collecting at boot (recommended in a cluster). fixture: open with the simulation only.
+mode: live
+clusterName: ""
+liveInterval: 2
+
+sources:
+  # e.g. http://nvidia-dcgm-exporter.gpu-operator.svc:9400/metrics (GPU Operator default service)
+  dcgmExporterUrl: ""
+  # e.g. http://prometheus-operated.monitoring.svc:9090
+  prometheusUrl: ""
+  # Optional bearer token for Prometheus, read from an existing Secret.
+  prometheusTokenSecret:
+    name: ""
+    key: token
+  # The Kubernetes API is reached with the chart's service account (get/list/watch on nodes, pods, events).
+  kubernetes: true
+  # Pods normally cannot see host GPUs or host /proc; keep these off unless you run GPU Lens as a GPU workload.
+  nvidiaSmi: false
+  amdSmi: false
+  hostVitals: false
+
+# Allow connection settings to be edited from the browser. Off by default: endpoints come from the values above.
+allowRemoteConfig: false
+
+auth:
+  # HTTP basic auth for the whole console and API (/healthz and /readyz stay public for probes).
+  # Put an Ingress with TLS in front of it: basic auth sends the password with every request.
+  enabled: false
+  adminUser: admin
+  adminPassword: ""
+  # Optional read-only account.
+  viewerUser: ""
+  viewerPassword: ""
+  # Use an existing Secret instead (keys: admin-user, admin-password, viewer-user, viewer-password).
+  existingSecret: ""
+
+alerts:
+  slackWebhookUrl: ""
+  webhookUrl: ""
+  webhookSecret: ""
+  minSeverity: warning
+  # External URL of the console, used for "Open in GPU Lens" links in alerts.
+  publicUrl: ""
+  # Use an existing Secret instead (keys: slack-webhook-url, webhook-url, webhook-secret).
+  existingSecret: ""
+
+# Durable live state (thresholds, resolved incidents, alert record) and the audit log live in /app/data.
+# Without persistence they survive container restarts but not pod rescheduling.
+persistence:
+  enabled: false
+  size: 1Gi
+  storageClass: ""
+  accessMode: ReadWriteOnce
+
+audit:
+  enabled: true
+
+fleet:
+  # Other GPU Lens instances to show on the Fleet tab.
+  # - name: cluster-b
+  #   url: https://gpulens.cluster-b.example.com
+  peers: []
+  interval: 15
+
+rbac:
+  create: true
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+service:
+  type: ClusterIP
+  port: 8080
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  host: gpulens.example.com
+  tls: []
+  #  - secretName: gpulens-tls
+  #    hosts: [gpulens.example.com]
+
+serviceMonitor:
+  # Requires the Prometheus Operator CRDs. Scrapes GPU Lens's own /metrics (not GPU telemetry).
+  enabled: false
+  interval: 30s
+  labels: {}
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    memory: 256Mi
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: [ALL]
+
+podAnnotations: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+extraArgs: []
+extraEnv: []
