@@ -332,17 +332,31 @@ export function renderGPUs(
   );
 }
 
+const NOT_EXPORTED = '— (not exported)';
+
+// metricCell shows a value only when one of this GPU's sources really publishes the metric. A missing metric is
+// never rendered as 0 (nvidia-smi, for example, has no Xid or PCIe-replay counters) and never as "undefined".
+function metricCell(g: LiveGPU, metric: string, value: any, fmt: (v: any) => any = (v) => v): any {
+  const exported = g.exported_metrics;
+  const known = Array.isArray(exported) && exported.some((x) => x.indexOf('DCGM_') === 0);
+  if (known && exported!.indexOf(metric) < 0) return NOT_EXPORTED;
+  if (value === null || value === undefined) return NOT_EXPORTED;
+  return fmt(value);
+}
+
 function renderGPUDetail(g: LiveGPU) {
   const m = g.latest as any;
   const rows: [string, any][] = [
     ['UUID', g.uuid], ['PCI bus', g.pci_bus_id || '—'], ['Driver', g.driver_version || '—'], ['P-state', g.pstate || '—'],
     ['Memory total', mib(g.total_memory_mib || null)], ['VRAM used / free', `${mib(m.fb_used_mib)} / ${mib(m.fb_free_mib)}`],
-    ['Memory copy util', num(m.mem_copy_util_percent, 0, '%')], ['Memory (HBM) temp', num(m.memory_temp_celsius, 0, '°C')],
-    ['Power limit', g.power_limit_watts ? `${g.power_limit_watts} W` : '—'], ['Fan', g.fan_speed_percent === null ? '—' : `${g.fan_speed_percent}%`],
+    ['Memory copy util', metricCell(g, 'DCGM_FI_DEV_MEM_COPY_UTIL', m.mem_copy_util_percent, (v) => num(v, 0, '%'))],
+    ['Memory (HBM) temp', metricCell(g, 'DCGM_FI_DEV_MEMORY_TEMP', m.memory_temp_celsius, (v) => num(v, 0, '°C'))],
+    ['Power limit', g.power_limit_watts ? `${g.power_limit_watts} W` : '—'], ['Fan', g.fan_speed_percent === null || g.fan_speed_percent === undefined ? '—' : `${g.fan_speed_percent}%`],
     ['PCIe link', g.pcie ? `Gen${g.pcie.gen_current}/${g.pcie.gen_max} · x${g.pcie.width_current}/${g.pcie.width_max}` : '—'],
-    ['XID error', m.xid_error_code === null ? '— (not exported)' : m.xid_error_code], ['PCIe replays', m.pcie_replay_counter === null ? '— (not exported)' : m.pcie_replay_counter],
-    ['ECC double-bit', m.ecc_dbe_vol_total === null ? '— (not exported)' : m.ecc_dbe_vol_total], ['ECC single-bit', m.ecc_sbe_vol_total === null ? '— (not exported)' : m.ecc_sbe_vol_total],
-    ['Row-remap failure', m.row_remap_failure === null ? '— (not exported)' : m.row_remap_failure], ['Thermal violation', m.thermal_violation_ns === null ? '— (not exported)' : `${m.thermal_violation_ns} ns`],
+    ['XID error', metricCell(g, 'DCGM_FI_DEV_XID_ERRORS', m.xid_error_code)], ['PCIe replays', metricCell(g, 'DCGM_FI_DEV_PCIE_REPLAY_COUNTER', m.pcie_replay_counter)],
+    ['ECC double-bit', metricCell(g, 'DCGM_FI_DEV_ECC_DBE_VOL_TOTAL', m.ecc_dbe_vol_total)], ['ECC single-bit', metricCell(g, 'DCGM_FI_DEV_ECC_SBE_VOL_TOTAL', m.ecc_sbe_vol_total)],
+    ['Row-remap failure', metricCell(g, 'DCGM_FI_DEV_ROW_REMAP_FAILURE', m.row_remap_failure)],
+    ['Thermal violation', metricCell(g, 'DCGM_FI_DEV_THERMAL_VIOLATION', m.thermal_violation_ns, (v) => `${v} ns`)],
     ['Reported by', (g.sources || []).join(', ') || '—'], ['Samples this session', g.sample_count], ['Incidents', (g.incident_ids || []).join(', ') || 'none'],
   ];
   return (
