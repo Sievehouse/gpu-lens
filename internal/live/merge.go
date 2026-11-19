@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 The GPU Lens Authors
+
 package live
 
 import (
@@ -6,10 +9,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gpulens/gpu-lens/internal/capacity"
-	"github.com/gpulens/gpu-lens/internal/config"
-	"github.com/gpulens/gpu-lens/internal/domain"
-	"github.com/gpulens/gpu-lens/internal/source"
+	"github.com/Sievehouse/gpu-lens/internal/alert"
+	"github.com/Sievehouse/gpu-lens/internal/capacity"
+	"github.com/Sievehouse/gpu-lens/internal/config"
+	"github.com/Sievehouse/gpu-lens/internal/domain"
+	"github.com/Sievehouse/gpu-lens/internal/source"
 )
 
 const (
@@ -21,7 +25,7 @@ const (
 	sampleRetention     = 6 * time.Hour
 	thinEveryTicks      = 30
 	lowUtilRuleID       = "GPU-UTIL-003"
-	noteHostProcess     = "Host compute process reported by nvidia-smi (not a Kubernetes pod)."
+	noteHostProcess     = "Host compute process reported by the local GPU driver (nvidia-smi / amd-smi), not a Kubernetes pod."
 	noteInferredFromDCG = "Inferred from DCGM pod labels (Kubernetes API not connected)."
 )
 
@@ -54,6 +58,7 @@ type mergeFacts struct {
 	freshGPUs        int
 	mappedGPUs       int
 	smiOnlyGPUs      int
+	amdGPUs          int
 	emulatedGPUs     int
 	unmatchedNodes   []string
 	attributionGaps  []string
@@ -65,7 +70,11 @@ type mergeFacts struct {
 	inferredPods     int
 }
 
-var sourcePriority = map[string]int{SourceNvidiaSMI: 0, SourceDCGM: 1, SourcePrometheus: 2}
+var sourcePriority = map[string]int{SourceNvidiaSMI: 0, SourceAMDSMI: 0, SourceDCGM: 1, SourcePrometheus: 2}
+
+// isLocalDriverSource reports whether a source reads the GPUs of the machine GPU Lens runs on through its driver
+// tool (nvidia-smi or amd-smi), as opposed to cluster telemetry.
+func isLocalDriverSource(id string) bool { return id == SourceNvidiaSMI || id == SourceAMDSMI }
 
 func cloneExtras(ex source.GPUExtras) source.GPUExtras {
 	out := ex
@@ -292,6 +301,13 @@ func (e *Engine) integrateLocked(tickStart time.Time) {
 			}
 			for _, g := range out.smi.GPUs {
 				e.observeLocked(SourceNvidiaSMI, g, out.smi.Extras[g.UUID], out.smi.Exported, out.at)
+			}
+		case SourceAMDSMI:
+			if out.amd == nil {
+				continue
+			}
+			for _, g := range out.amd.GPUs {
+				e.observeLocked(SourceAMDSMI, g, out.amd.Extras[g.UUID], out.amd.Exported, out.at)
 			}
 		case SourceDCGM:
 			if out.dcgm == nil {
@@ -594,7 +610,7 @@ func (e *Engine) assembleAndEvaluateLocked(now time.Time) {
 			// local workstation's own GPUs (nvidia-smi only) are simply outside the cluster.
 			for _, uuid := range list {
 				for _, src := range e.devices[uuid].extras.Sources {
-					if src != SourceNvidiaSMI {
+					if !isLocalDriverSource(src) {
 						facts.unmatchedNodes = appendUniqueStr(facts.unmatchedNodes, name)
 					}
 				}
@@ -773,6 +789,9 @@ func (e *Engine) assembleAndEvaluateLocked(now time.Time) {
 		if len(ds.extras.Sources) == 1 && ds.extras.Sources[0] == SourceNvidiaSMI {
 			facts.smiOnlyGPUs++
 		}
+		if len(ds.extras.Sources) == 1 && ds.extras.Sources[0] == SourceAMDSMI {
+			facts.amdGPUs++
+		}
 		if ds.extras.Emulated {
 			facts.emulatedGPUs++
 		}
@@ -785,6 +804,11 @@ func (e *Engine) assembleAndEvaluateLocked(now time.Time) {
 	e.exported = map[string]bool{}
 	if st := e.src[SourceNvidiaSMI]; st != nil && st.smi != nil && st.status.State != StateDisabled {
 		for k, v := range st.smi.Exported {
+			e.exported[k] = e.exported[k] || v
+		}
+	}
+	if st := e.src[SourceAMDSMI]; st != nil && st.amd != nil && st.status.State != StateDisabled {
+		for k, v := range st.amd.Exported {
 			e.exported[k] = e.exported[k] || v
 		}
 	}
@@ -871,6 +895,9 @@ func (e *Engine) assembleAndEvaluateLocked(now time.Time) {
 	sortIncidents(incidents)
 	e.annotateProvenanceLocked(incidents)
 	incidents = e.trackIncidentsLocked(incidents, now)
+	// Resolutions are only announced once the session has settled, so a restart does not report every incident
+	// as resolved before its sources have been read again.
+	e.alerts.Sync(incidents, alert.Meta{Cluster: snap.ClusterName, DataMode: snap.DataMode, Version: Version}, e.tick >= 3)
 
 	capReport := capacity.BuildReport(&windowed, e.thresholds)
 	for i := range capReport.Nodes {
@@ -925,7 +952,7 @@ func sortIncidents(list []domain.Incident) {
 
 func (e *Engine) describeSessionLocked(f mergeFacts, emulated bool) string {
 	var parts []string
-	for _, id := range []string{SourceNvidiaSMI, SourceDCGM, SourcePrometheus, SourceKubernetes} {
+	for _, id := range []string{SourceNvidiaSMI, SourceAMDSMI, SourceDCGM, SourcePrometheus, SourceKubernetes} {
 		st := e.src[id]
 		if st != nil && (st.status.State == StateConnected || st.status.State == StateDegraded) {
 			parts = append(parts, st.status.Name)
@@ -947,12 +974,12 @@ func (e *Engine) sourceHealthLocked(now time.Time) []domain.SourceHealth {
 	var out []domain.SourceHealth
 	reqNames := source.RequiredDCGMMetrics(e.base.MetricMappings)
 	optNames := source.OptionalDCGMMetrics(e.base.MetricMappings)
-	for _, id := range []string{SourceNvidiaSMI, SourceDCGM, SourcePrometheus, SourceKubernetes} {
+	for _, id := range []string{SourceNvidiaSMI, SourceAMDSMI, SourceDCGM, SourcePrometheus, SourceKubernetes} {
 		st := e.src[id]
 		if st == nil || !st.status.Enabled {
 			continue
 		}
-		if !st.everConnected && !(st.status.Explicit && id != SourceNvidiaSMI) && st.status.State != StateError {
+		if !st.everConnected && !(st.status.Explicit && !isLocalDriverSource(id)) && st.status.State != StateError {
 			continue
 		}
 		if st.status.State == StatePending {
@@ -981,6 +1008,10 @@ func (e *Engine) sourceHealthLocked(now time.Time) []domain.SourceHealth {
 		case SourceNvidiaSMI:
 			if st.smi != nil {
 				exported = st.smi.Exported
+			}
+		case SourceAMDSMI:
+			if st.amd != nil {
+				exported = st.amd.Exported
 			}
 		case SourceDCGM:
 			if st.dcgmNorm != nil {
@@ -1058,45 +1089,48 @@ func buildOverview(snap *domain.ClusterSnapshot, incidents []domain.Incident, ca
 // annotateProvenanceLocked corrects evidence provenance for GPUs that were read through nvidia-smi: the rules
 // name signals by their canonical DCGM field, but the reading itself came from the local NVIDIA driver.
 func (e *Engine) annotateProvenanceLocked(incidents []domain.Incident) {
-	smiOnly := map[string]bool{}
+	localOnly := map[string]string{}
 	for uuid, ds := range e.devices {
-		if len(ds.extras.Sources) == 1 && ds.extras.Sources[0] == SourceNvidiaSMI {
-			smiOnly[uuid] = true
+		if len(ds.extras.Sources) == 1 && isLocalDriverSource(ds.extras.Sources[0]) {
+			localOnly[uuid] = ds.extras.Sources[0]
 		}
 	}
-	if len(smiOnly) == 0 {
+	if len(localOnly) == 0 {
 		return
 	}
-	touches := func(ref string) bool {
-		for uuid := range smiOnly {
+	touches := func(ref string) string {
+		for uuid, src := range localOnly {
 			if strings.Contains(ref, uuid) {
-				return true
+				return src
 			}
 		}
-		return false
+		return ""
 	}
-	const note = "Telemetry for the affected GPU was read from the local NVIDIA driver via nvidia-smi; DCGM field names denote the equivalent canonical signals."
+	notes := map[string]string{
+		SourceNvidiaSMI: "Telemetry for the affected GPU was read from the local NVIDIA driver via nvidia-smi; DCGM field names denote the equivalent canonical signals.",
+		SourceAMDSMI:    "Telemetry for the affected GPU was read from the local AMD driver via amd-smi; DCGM field names denote the equivalent canonical signals.",
+	}
 	for i := range incidents {
 		inc := &incidents[i]
-		changed := false
+		via := ""
 		for _, list := range [][]domain.EvidenceItem{inc.SupportingEvidence, inc.ContradictingEvidence} {
 			for j := range list {
-				if list[j].Source == "dcgm_exporter" && touches(list[j].ObjectRef) {
-					list[j].Source = "nvidia_smi"
-					changed = true
+				if src := touches(list[j].ObjectRef); list[j].Source == "dcgm_exporter" && src != "" {
+					list[j].Source = src
+					via = src
 				}
 			}
 		}
-		if !changed {
+		if via == "" {
 			for _, r := range inc.AffectedResources {
-				if touches(r) {
-					changed = true
+				if src := touches(r); src != "" {
+					via = src
 					break
 				}
 			}
 		}
-		if changed {
-			inc.ObservedFacts = append(inc.ObservedFacts, note)
+		if via != "" {
+			inc.ObservedFacts = append(inc.ObservedFacts, notes[via])
 		}
 	}
 }
