@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """
 GPU Lens live telemetry engine for the Python runtime ("Go Live", Python edition).
 
@@ -26,10 +27,12 @@ import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
-VERSION = "0.2.0"
+VERSION = "0.3.0-dev"
 RUNTIME = "python"
 
 SOURCE_HOST, SOURCE_SMI, SOURCE_DCGM, SOURCE_PROM, SOURCE_K8S = "host", "nvidia_smi", "dcgm_exporter", "prometheus", "kubernetes"
+SOURCE_AMD = "amd_smi"
+LOCAL_DRIVER_SOURCES = (SOURCE_SMI, SOURCE_AMD)
 HOST_PROCESS_NS = "host-processes"
 LAB_MARKER = "gpulens_lab_emulator_info"
 GPU_RESOURCE = "nvidia.com/gpu"
@@ -579,6 +582,239 @@ class NvidiaSMISource:
                 "fields_note": note, "no_devices": not gpus, "notes": notes}
 
 
+class AMDNotFound(SMINotFound):
+    pass
+
+
+AMD_ALLOWED = (("list", "--json"), ("static", "--json"), ("metric", "--json"), ("process", "--json"))
+AMD_WELL_KNOWN = ("/opt/rocm/bin/amd-smi", "/usr/bin/amd-smi", "/usr/local/bin/amd-smi")
+
+
+def _amd_records(raw):
+    doc = json.loads(raw)
+    if isinstance(doc, list):
+        return doc
+    if isinstance(doc, dict):
+        for key in ("gpu_data", "gpus", "data"):
+            if isinstance(doc.get(key), list):
+                return doc[key]
+    raise ValueError("amd-smi JSON has no per-GPU list")
+
+
+def _amd_num(v):
+    if isinstance(v, bool):
+        return None
+    if isinstance(v, (int, float)):
+        return float(v)
+    if isinstance(v, str):
+        return _num(v.split(" ")[0])
+    if isinstance(v, dict):
+        return _amd_num(v.get("value"))
+    return None
+
+
+def _amd_unit(v):
+    if isinstance(v, dict) and isinstance(v.get("unit"), str):
+        return v["unit"].strip().upper()
+    if isinstance(v, str) and " " in v.strip():
+        return v.strip().rsplit(" ", 1)[1].upper()
+    return ""
+
+
+def _amd_mib(v, default_unit):
+    n = _amd_num(v)
+    if n is None:
+        return None
+    unit = _amd_unit(v) or default_unit
+    return {"B": n / 1048576.0, "KB": n / 1024.0, "KIB": n / 1024.0, "GB": n * 1024.0, "GIB": n * 1024.0}.get(unit, n)
+
+
+def _amd_str(v):
+    if isinstance(v, dict):
+        return _amd_str(v.get("value"))
+    if isinstance(v, (int, float)) and not isinstance(v, bool):
+        return f"{v:g}"
+    if isinstance(v, str):
+        return "" if v.strip().upper() == "N/A" else v.strip()
+    return ""
+
+
+def _amd_index(rec):
+    for k in ("gpu", "gpu_id", "index"):
+        n = _amd_num(rec.get(k))
+        if n is not None:
+            return int(n)
+    return None
+
+
+def _pcie_gen(gts):
+    for floor, gen in ((60, 6), (30, 5), (15, 4), (7.5, 3), (4.5, 2)):
+        if gts >= floor:
+            return gen
+    return 1 if gts > 0 else 0
+
+
+class AMDSMISource:
+    """Mirror of internal/source/amd_smi_source.go (experimental): four fixed read-only amd-smi JSON queries."""
+
+    def __init__(self, path="", timeout=8.0):
+        self.path = path
+        self.timeout = timeout
+        self._static = None
+        self._static_at = 0.0
+
+    def _find(self):
+        if self.path:
+            if os.path.isfile(self.path) and os.access(self.path, os.X_OK):
+                return self.path
+            raise AMDNotFound(f"amd-smi was not found at the configured path {self.path}")
+        found = shutil.which("amd-smi")
+        if found:
+            return found
+        for p in AMD_WELL_KNOWN + ((os.path.join(os.environ["ROCM_PATH"], "bin", "amd-smi"),) if os.environ.get("ROCM_PATH") else ()):
+            if os.path.isfile(p) and os.access(p, os.X_OK):
+                return p
+        raise AMDNotFound("amd-smi was not found on PATH or in /opt/rocm/bin")
+
+    def _exec(self, binary, *args):
+        if tuple(args) not in AMD_ALLOWED:
+            raise PermissionError("amd-smi invocation is not on the read-only allow-list")
+        try:
+            p = subprocess.run([binary, *args], capture_output=True, text=True, timeout=self.timeout, stdin=subprocess.DEVNULL, shell=False)
+        except subprocess.TimeoutExpired:
+            raise RuntimeError(f"amd-smi {args[0]} timed out")
+        if p.returncode != 0:
+            msg = (p.stderr or p.stdout).strip()
+            raise RuntimeError(msg.splitlines()[0][:300] if msg else f"amd-smi exited {p.returncode}")
+        return p.stdout
+
+    def _refresh_static(self, binary, notes):
+        if self._static is not None and time.time() - self._static_at < 300:
+            return self._static
+        listing, static = {}, {}
+        try:
+            for r in _amd_records(self._exec(binary, "list", "--json")):
+                i = _amd_index(r)
+                if i is not None:
+                    listing[i] = {"uuid": _amd_str(r.get("uuid")), "bdf": _amd_str(r.get("bdf"))}
+        except Exception as e:
+            notes.append("GPU list unavailable: " + sanitize_error(e))
+        try:
+            for r in _amd_records(self._exec(binary, "static", "--json")):
+                i = _amd_index(r)
+                if i is None:
+                    continue
+                asic, drv, bus, lim = (r.get(k) if isinstance(r.get(k), dict) else {} for k in ("asic", "driver", "bus", "limit"))
+                power = 0.0
+                for k in ("max_power", "power_cap", "socket_power"):
+                    v = _amd_num(lim.get(k))
+                    if v:
+                        power = v
+                        break
+                static[i] = {"model": _amd_str(asic.get("market_name")), "serial": _amd_str(asic.get("asic_serial")), "driver": _amd_str(drv.get("version")),
+                             "bdf": _amd_str(bus.get("bdf")), "max_width": int(_amd_num(bus.get("max_pcie_width")) or 0),
+                             "max_gen": _pcie_gen(_amd_num(bus.get("max_pcie_speed")) or 0), "power_limit": power}
+        except Exception as e:
+            notes.append("Static GPU facts unavailable: " + sanitize_error(e))
+        self._static, self._static_at = (listing, static), time.time()
+        return self._static
+
+    def collect(self, hostname):
+        binary = self._find()
+        notes = []
+        try:
+            raw = self._exec(binary, "metric", "--json")
+        except RuntimeError as e:
+            m = str(e).lower()
+            if "no gpu" in m or "no amd gpu" in m or "no devices" in m:
+                return {"binary": binary, "driver": "", "gpus": [], "extras": {}, "processes": {}, "exported": {}, "fields_note": "amd-smi JSON (experimental)",
+                        "no_devices": True, "notes": ["The AMD driver tools answered but report no GPUs."]}
+            raise
+        recs = _amd_records(raw)
+        listing, static = self._refresh_static(binary, notes)
+        now = iso(utcnow())
+        gpus, extras, by_index, exported, driver = [], {}, {}, {}, ""
+        for r in recs:
+            i = _amd_index(r)
+            if i is None:
+                continue
+            st, li = static.get(i, {}), listing.get(i, {})
+            bdf = li.get("bdf") or st.get("bdf", "")
+            uuid = li.get("uuid") or (("AMD-" + st["serial"]) if st.get("serial") else (("AMD-" + bdf) if bdf else f"AMD-{hostname}-{i}"))
+            sec = lambda *keys: next((r[k] for k in keys if isinstance(r.get(k), dict)), {})
+            usage, mem, temp, power, ecc, fan, pcie = sec("usage"), sec("mem_usage", "memory_usage"), sec("temperature"), sec("power"), sec("ecc"), sec("fan"), sec("pcie")
+            latest = {"timestamp": now, "gpu_util_percent": 0.0, "mem_copy_util_percent": 0.0, "fb_used_mib": 0.0, "fb_free_mib": 0.0,
+                      "gpu_temp_celsius": 0.0, "memory_temp_celsius": 0.0, "power_usage_watts": 0.0,
+                      "xid_error_code": 0, "pcie_replay_counter": 0, "row_remap_failure": 0, "uncorrectable_remapped_rows": 0}
+            v = _amd_num(usage.get("gfx_activity"))
+            if v is not None:
+                latest["gpu_util_percent"], exported[Mapping.gpu_util] = v, True
+            v = _amd_num(usage.get("umc_activity"))
+            if v is not None:
+                latest["mem_copy_util_percent"], exported[Mapping.mem_copy] = v, True
+            total, used, free = _amd_mib(mem.get("total_vram"), "MB"), _amd_mib(mem.get("used_vram"), "MB"), _amd_mib(mem.get("free_vram"), "MB")
+            if free is None and total is not None and used is not None:
+                free = total - used
+            if used is not None:
+                latest["fb_used_mib"], exported[Mapping.fb_used] = used, True
+            if free is not None:
+                latest["fb_free_mib"], exported[Mapping.fb_free] = free, True
+            t = _amd_num(temp.get("edge"))
+            if t is None:
+                t = _amd_num(temp.get("hotspot"))
+            if t is not None:
+                latest["gpu_temp_celsius"], exported[Mapping.gpu_temp] = t, True
+            t = _amd_num(temp.get("mem"))
+            if t is not None:
+                latest["memory_temp_celsius"], exported[Mapping.mem_temp] = t, True
+            for k in ("socket_power", "average_socket_power", "current_socket_power"):
+                v = _amd_num(power.get(k))
+                if v is not None:
+                    latest["power_usage_watts"], exported[Mapping.power] = v, True
+                    break
+            throttles = ["amd_throttled"] if _amd_str(power.get("throttle_status")).upper() == "THROTTLED" else []
+            v = _amd_num(ecc.get("total_uncorrectable_count"))
+            if v is not None:
+                latest["ecc_dbe_vol_total"], exported[Mapping.ecc_dbe] = int(v), True
+            v = _amd_num(ecc.get("total_correctable_count"))
+            if v is not None:
+                latest["ecc_sbe_vol_total"], exported[Mapping.ecc_sbe] = int(v), True
+            link = None
+            w, sp = _amd_num(pcie.get("width")), _amd_num(pcie.get("speed"))
+            if w is not None and sp is not None and st.get("max_width") and st.get("max_gen"):
+                link = {"gen_current": _pcie_gen(sp), "gen_max": st["max_gen"], "width_current": int(w), "width_max": st["max_width"]}
+            driver = driver or st.get("driver", "")
+            if total is None and used is not None and free is not None:
+                total = used + free
+            dev = {"uuid": uuid, "device_index": i, "node_name": hostname, "model_name": st.get("model") or "AMD GPU", "pci_bus_id": bdf,
+                   "driver_version": st.get("driver", ""), "power_limit_watts": st.get("power_limit", 0.0), "total_memory_mib": total or 0.0,
+                   "allocated_namespace": "", "allocated_pod": "", "allocated_container": "", "mapping_status": "unallocated",
+                   "last_sample_at": now, "latest": latest}
+            gpus.append(dev)
+            extras[uuid] = {"sources": [SOURCE_AMD], "fan_speed_percent": _amd_num(fan.get("usage")), "pstate": "", "throttle_reasons": throttles,
+                            "pcie": link, "processes": [], "emulated": False, "mig_profile": ""}
+            by_index[i] = uuid
+        procs_by_uuid = {}
+        try:
+            for r in _amd_records(self._exec(binary, "process", "--json")):
+                uuid = by_index.get(_amd_index(r))
+                if not uuid:
+                    continue
+                for item in r.get("process_list") or []:
+                    info = item.get("process_info") if isinstance(item.get("process_info"), dict) else item
+                    pid = _amd_num(info.get("pid"))
+                    if pid is None:
+                        continue
+                    mu = info.get("memory_usage") if isinstance(info.get("memory_usage"), dict) else {}
+                    procs_by_uuid.setdefault(uuid, []).append({"pid": int(pid), "name": _amd_str(info.get("name")), "used_memory_mib": _amd_mib(mu.get("vram_mem"), "B")})
+        except Exception:
+            notes.append("Compute process list unavailable (amd-smi process may need elevated permissions).")
+        for uuid, procs in procs_by_uuid.items():
+            extras[uuid]["processes"] = procs
+        return {"binary": binary, "driver": driver, "gpus": gpus, "extras": extras, "processes": procs_by_uuid, "exported": exported,
+                "fields_note": "amd-smi JSON (experimental)", "no_devices": not gpus, "notes": notes}
+
+
 # ---------------------------------------------------------------------------------------------
 # DCGM exposition parsing + normalisation
 # ---------------------------------------------------------------------------------------------
@@ -1011,7 +1247,7 @@ def default_live_config():
         return {"enabled": True, "explicit": False, "endpoint": DEFAULT_ENDPOINTS[key], "bearer_token": "", "token_file": "", "ca_file": ""}
 
     return {"enabled": True, "auto_start": False, "allow_remote_config": False, "interval_seconds": 2.0, "idle_timeout_seconds": 900.0,
-            "history_points": 900, "cluster_name": "", "nvidia_smi_enabled": True, "nvidia_smi_path": "", "host_vitals_enabled": True,
+            "history_points": 900, "cluster_name": "", "nvidia_smi_enabled": True, "nvidia_smi_path": "", "amd_smi_enabled": True, "amd_smi_path": "", "host_vitals_enabled": True,
             "dcgm_exporter": src(SOURCE_DCGM), "prometheus": src(SOURCE_PROM), "kubernetes": src(SOURCE_K8S),
             "prometheus_backfill_minutes": 60.0, "in_cluster": False}
 
@@ -1046,6 +1282,11 @@ def apply_env(cfg, env=None):
         cfg["nvidia_smi_enabled"] = b
     if env.get("GPULENS_NVIDIA_SMI_PATH", "").strip():
         cfg["nvidia_smi_path"] = env["GPULENS_NVIDIA_SMI_PATH"].strip()
+    b = _env_bool(env.get("GPULENS_AMD_SMI", ""))
+    if b is not None:
+        cfg["amd_smi_enabled"] = b
+    if env.get("GPULENS_AMD_SMI_PATH", "").strip():
+        cfg["amd_smi_path"] = env["GPULENS_AMD_SMI_PATH"].strip()
     b = _env_bool(env.get("GPULENS_HOST_VITALS"))
     if b is not None:
         cfg["host_vitals_enabled"] = b
@@ -1109,7 +1350,8 @@ def config_view(c):
 
     return {"enabled": c["enabled"], "auto_start": c["auto_start"], "allow_remote_config": c["allow_remote_config"], "interval_seconds": c["interval_seconds"],
             "idle_timeout_seconds": c["idle_timeout_seconds"], "history_points": c["history_points"], "cluster_name": c["cluster_name"],
-            "nvidia_smi_enabled": c["nvidia_smi_enabled"], "nvidia_smi_path": c["nvidia_smi_path"], "host_vitals_enabled": c["host_vitals_enabled"],
+            "nvidia_smi_enabled": c["nvidia_smi_enabled"], "nvidia_smi_path": c["nvidia_smi_path"],
+            "amd_smi_enabled": c["amd_smi_enabled"], "amd_smi_path": c["amd_smi_path"], "host_vitals_enabled": c["host_vitals_enabled"],
             "dcgm_exporter": sv(c["dcgm_exporter"]), "prometheus": sv(c["prometheus"]), "kubernetes": sv(c["kubernetes"]),
             "prometheus_backfill_minutes": c["prometheus_backfill_minutes"], "in_cluster": c["in_cluster"]}
 
@@ -1185,6 +1427,17 @@ def severity_rank(s):
     return {"critical": 3, "warning": 2}.get(s, 1)
 
 
+def amd_error_hint(err):
+    m = str(err).lower()
+    if "not initialized" in m or "driver not loaded" in m:
+        return "The amdgpu kernel driver is not loaded. Check `dmesg | grep -i amdgpu` and the ROCm installation."
+    if "permission" in m:
+        return "The user running GPU Lens may not read the GPU. Add it to the `render` and `video` groups."
+    if "timed out" in m:
+        return "The driver did not answer in time. Check `dmesg` for GPU resets or hangs."
+    return "Run `amd-smi metric` in a terminal on this machine to see the full driver error."
+
+
 def smi_error_hint(err):
     msg = str(err).lower()
     if "couldn't communicate with the nvidia driver" in msg:
@@ -1228,6 +1481,12 @@ class Engine:
         self.last_poll = time.time()
         self.src = {}
         self.history_epoch = 0
+        # alerting and durable state (gpulens_extras.py)
+        self.alerts = None
+        self.state_path = ""
+        self.state_loaded_at = self.state_saved_at = None
+        self.state_err = ""
+        self.restored_resolved, self.restored_first_seen = [], {}
         self._rebuild_sources()
         self._reset_session()
 
@@ -1245,7 +1504,7 @@ class Engine:
                              "endpoint": endpoint, "detail": "" if enabled else "Turned off in the live configuration.", "hint": "", "last_attempt_at": None,
                              "last_success_at": None, "last_error": "", "last_latency_ms": None, "latency_history_ms": [], "consecutive_failures": 0,
                              "success_count": 0, "failure_count": 0, "refresh_seconds": 0, "emulated": False, "read_only": read_only, "facts": []},
-                  "ever": False, "inflight": False, "next_due": 0.0, "smi": None, "dcgm": None, "dcgm_norm": None, "prom": None, "k8s": None}
+                  "ever": False, "inflight": False, "next_due": 0.0, "smi": None, "amd": None, "dcgm": None, "dcgm_norm": None, "prom": None, "k8s": None}
             self.src[sid] = st
             return st
 
@@ -1256,6 +1515,10 @@ class Engine:
         mk(SOURCE_SMI, "Local NVIDIA driver (nvidia-smi)", "nvidia_smi", smi_ep,
            "Fixed allow-list of read-only query flags; no shell, no state-changing options.", c["nvidia_smi_enabled"], bool(c["nvidia_smi_path"]))
         self.smi_src = NvidiaSMISource(c["nvidia_smi_path"]) if c["nvidia_smi_enabled"] else None
+        amd_ep = "local amd-smi (auto-discovered)" if not c["amd_smi_path"] else "local " + c["amd_smi_path"]
+        mk(SOURCE_AMD, "Local AMD driver (amd-smi, experimental)", "amd_smi", amd_ep,
+           "Four fixed read-only JSON queries (list, static, metric, process); no shell, no state-changing options.", c["amd_smi_enabled"], bool(c["amd_smi_path"]))
+        self.amd_src = AMDSMISource(c["amd_smi_path"]) if c["amd_smi_enabled"] else None
         self.http = {}
         for sid, key, name, kind, extra in ((SOURCE_DCGM, "dcgm_exporter", "DCGM exporter (direct /metrics scrape)", "dcgm_exporter", ""),
                                             (SOURCE_PROM, "prometheus", "Prometheus HTTP API", "prometheus", ""),
@@ -1281,14 +1544,15 @@ class Engine:
         self.history, self.seq = [], 0
         self.history_epoch += 1
         self.activity, self.activity_seq = [], 0
-        self.open, self.resolved = {}, []
+        self.open, self.resolved = {}, list(self.restored_resolved)
+        self.restored_resolved = []
         self.prev = {"initialized": False}
         self.merge = self._empty_facts()
         self.exported = {}
 
     @staticmethod
     def _empty_facts():
-        return {"total": 0, "fresh": 0, "mapped": 0, "smi_only": 0, "emulated": 0, "unmatched_nodes": [], "gaps": [], "unknown_pod_gpus": 0,
+        return {"total": 0, "fresh": 0, "mapped": 0, "smi_only": 0, "amd": 0, "emulated": 0, "unmatched_nodes": [], "gaps": [], "unknown_pod_gpus": 0,
                 "inferred_nodes": [], "k8s_allocated": 0, "k8s_capacity": 0, "host_workloads": 0, "inferred_pods": 0}
 
     def interval(self):
@@ -1420,6 +1684,8 @@ class Engine:
                 launch(SOURCE_HOST, lambda: {"host": self.host_src.collect()})
             if self.smi_src is not None:
                 launch(SOURCE_SMI, lambda: {"smi": self.smi_src.collect(self.hostname)})
+            if self.amd_src is not None:
+                launch(SOURCE_AMD, lambda: {"amd": self.amd_src.collect(self.hostname)})
             c = self.cfg
             for sid, key in ((SOURCE_DCGM, "dcgm_exporter"), (SOURCE_K8S, "kubernetes"), (SOURCE_PROM, "prometheus")):
                 st = self.src[sid]
@@ -1533,6 +1799,16 @@ class Engine:
                 succeed()
                 st["smi"] = out["smi"]
                 self._describe_smi(st, out["smi"])
+        elif sid == SOURCE_AMD:
+            if out.get("not_found"):
+                neutral_not_found("amd-smi is not installed on this machine (only needed for AMD GPUs).",
+                                  "For AMD GPUs, install ROCm (it ships amd-smi). Machines with NVIDIA GPUs do not need it.", err)
+            elif err:
+                fail("error", "amd-smi is installed but the driver query failed.", amd_error_hint(err), err)
+            else:
+                succeed()
+                st["amd"] = out["amd"]
+                self._describe_amd(st, out["amd"])
         elif sid == SOURCE_DCGM:
             if err:
                 net_fail("No DCGM exporter answered on the default local address.",
@@ -1590,6 +1866,19 @@ class Engine:
                      hint="Check that the GPU is seated and visible in `lspci`, and that the driver matches the hardware.")
         elif res["notes"]:
             s.update(state="degraded", detail=f"{len(res['gpus'])} GPU(s) · driver {or_dash(res['driver'])} — {res['notes'][0]}")
+        else:
+            s.update(state="connected", detail=f"{len(res['gpus'])} GPU(s) · driver {or_dash(res['driver'])} · {procs} compute process(es)")
+
+    def _describe_amd(self, st, res):
+        s = st["status"]
+        s["endpoint"] = "local " + res["binary"]
+        procs = sum(len(x) for x in res["processes"].values())
+        s["facts"] = [{"label": "Binary", "value": res["binary"]}, {"label": "Driver version", "value": or_dash(res["driver"])},
+                      {"label": "GPUs", "value": str(len(res["gpus"]))}, {"label": "Compute processes", "value": str(procs)},
+                      {"label": "Support", "value": "Experimental: verified against AMD's documented output, not yet on real hardware"}]
+        if res["no_devices"]:
+            s.update(state="degraded", detail="The AMD driver tools answered but report no GPU devices.",
+                     hint="Check that the GPU is visible in `lspci` and that the amdgpu driver is loaded.")
         else:
             s.update(state="connected", detail=f"{len(res['gpus'])} GPU(s) · driver {or_dash(res['driver'])} · {procs} compute process(es)")
 
@@ -1680,7 +1969,7 @@ class Engine:
             self.activity = self.activity[-MAX_ACTIVITY:]
 
     # ----- integration -----
-    SOURCE_PRIORITY = {SOURCE_SMI: 0, SOURCE_DCGM: 1, SOURCE_PROM: 2}
+    SOURCE_PRIORITY = {SOURCE_SMI: 0, SOURCE_AMD: 0, SOURCE_DCGM: 1, SOURCE_PROM: 2}
 
     def _observe(self, sid, dev, extras, exported, at):
         uuid = dev["uuid"]
@@ -1766,6 +2055,10 @@ class Engine:
                 res = out["smi"]
                 for g in res["gpus"]:
                     self._observe(SOURCE_SMI, g, res["extras"].get(g["uuid"]), res["exported"], out["at"])
+            elif sid == SOURCE_AMD and out.get("amd"):
+                res = out["amd"]
+                for g in res["gpus"]:
+                    self._observe(SOURCE_AMD, g, res["extras"].get(g["uuid"]), res["exported"], out["at"])
             elif sid == SOURCE_DCGM and out.get("dcgm"):
                 norm = normalize_series(out["dcgm"]["series"], out["at"], max_stale, known, self.hostname, SOURCE_DCGM)
                 if out["dcgm"]["emulated_header"]:
@@ -1836,7 +2129,7 @@ class Engine:
             facts["inferred_nodes"].append(name)
             if self.k8s_nodes_ok:
                 for u in lst:
-                    if any(s != SOURCE_SMI for s in self.devices[u]["extras"]["sources"]):
+                    if any(s not in LOCAL_DRIVER_SOURCES for s in self.devices[u]["extras"]["sources"]):
                         if name not in facts["unmatched_nodes"]:
                             facts["unmatched_nodes"].append(name)
         for n in nodes:
@@ -1878,7 +2171,7 @@ class Engine:
             pods.append({"name": name, "namespace": HOST_PROCESS_NS, "uid": f"host-process:{d['node_name']}:{ds['proc_pid']}", "owner_kind": "HostProcess",
                          "owner_name": ds["proc_name"], "phase": "Running", "node_name": d["node_name"], "requested_gpus": 1, "assigned_gpu_uuids": [uuid],
                          "created_at": iso(since), "started_at": iso(since), "restart_count": 0,
-                         "status_detail": "Host compute process reported by nvidia-smi (not a Kubernetes pod)."})
+                         "status_detail": "Host compute process reported by the local GPU driver (nvidia-smi / amd-smi), not a Kubernetes pod."})
             pod_index[key] = len(pods) - 1
             facts["host_workloads"] += 1
 
@@ -1959,6 +2252,8 @@ class Engine:
                 facts["mapped"] += 1
             if ds["extras"]["sources"] == [SOURCE_SMI]:
                 facts["smi_only"] += 1
+            if ds["extras"]["sources"] == [SOURCE_AMD]:
+                facts["amd"] += 1
             if ds["extras"]["emulated"]:
                 facts["emulated"] += 1
             if d["allocated_pod"]:
@@ -1968,13 +2263,15 @@ class Engine:
                     observed_since[k] = t
 
         self.exported = {}
-        for sid in (SOURCE_SMI, SOURCE_DCGM, SOURCE_PROM):
+        for sid in (SOURCE_SMI, SOURCE_AMD, SOURCE_DCGM, SOURCE_PROM):
             st = self.src.get(sid)
             if not st:
                 continue
             ex = None
             if sid == SOURCE_SMI and st["smi"] and st["status"]["state"] != "disabled":
                 ex = st["smi"]["exported"]
+            elif sid == SOURCE_AMD and st["amd"] and st["status"]["state"] != "disabled":
+                ex = st["amd"]["exported"]
             elif sid == SOURCE_DCGM and st["dcgm_norm"]:
                 ex = st["dcgm_norm"]["exported"]
             elif sid == SOURCE_PROM and st["prom"]:
@@ -2021,6 +2318,9 @@ class Engine:
         incidents.sort(key=lambda i: (-severity_rank(i["severity"]), i["rule_id"], i["id"]))
         self._annotate_provenance(incidents)
         incidents = self._track_incidents(incidents, now)
+        if self.alerts is not None:
+            # Resolutions are only announced once the session has settled (see internal/live/merge.go).
+            self.alerts.sync(incidents, {"cluster": snap["cluster_name"], "data_mode": snap["data_mode"], "version": VERSION}, self.tick >= 3)
         cap = self.rt.build_capacity_report(windowed, th)
         for n in cap.get("nodes", []):
             if n["node_name"] in inferred and str(n.get("status_note", "")).startswith("Healthy"):
@@ -2034,7 +2334,7 @@ class Engine:
         self._diff_activity(now, incidents)
 
     def _describe_session(self, f, emulated):
-        parts = [self.src[i]["status"]["name"] for i in (SOURCE_SMI, SOURCE_DCGM, SOURCE_PROM, SOURCE_K8S)
+        parts = [self.src[i]["status"]["name"] for i in (SOURCE_SMI, SOURCE_AMD, SOURCE_DCGM, SOURCE_PROM, SOURCE_K8S)
                  if self.src[i]["status"]["state"] in ("connected", "degraded")]
         if not parts:
             return "No GPU telemetry source is connected. Nothing is being monitored."
@@ -2045,12 +2345,12 @@ class Engine:
 
     def _source_health(self, now):
         out = []
-        for sid in (SOURCE_SMI, SOURCE_DCGM, SOURCE_PROM, SOURCE_K8S):
+        for sid in (SOURCE_SMI, SOURCE_AMD, SOURCE_DCGM, SOURCE_PROM, SOURCE_K8S):
             st = self.src.get(sid)
             if st is None or not st["status"]["enabled"]:
                 continue
             s = st["status"]
-            if not st["ever"] and not (s["explicit"] and sid != SOURCE_SMI) and s["state"] != "error":
+            if not st["ever"] and not (s["explicit"] and sid not in LOCAL_DRIVER_SOURCES) and s["state"] != "error":
                 continue
             if s["state"] == "pending":
                 continue
@@ -2063,6 +2363,8 @@ class Engine:
             ex = None
             if sid == SOURCE_SMI and st["smi"]:
                 ex = st["smi"]["exported"]
+            elif sid == SOURCE_AMD and st["amd"]:
+                ex = st["amd"]["exported"]
             elif sid == SOURCE_DCGM and st["dcgm_norm"]:
                 ex = st["dcgm_norm"]["exported"]
             elif sid == SOURCE_PROM and st["prom"]:
@@ -2101,25 +2403,28 @@ class Engine:
                 "active_incidents": incidents, "sources": snap["sources"]}
 
     def _annotate_provenance(self, incidents):
-        smi_only = {u for u, ds in self.devices.items() if ds["extras"]["sources"] == [SOURCE_SMI]}
-        if not smi_only:
+        local_only = {u: ds["extras"]["sources"][0] for u, ds in self.devices.items()
+                      if len(ds["extras"]["sources"]) == 1 and ds["extras"]["sources"][0] in LOCAL_DRIVER_SOURCES}
+        if not local_only:
             return
-        note = ("Telemetry for the affected GPU was read from the local NVIDIA driver via nvidia-smi; DCGM field names denote the equivalent canonical signals.")
+        notes = {SOURCE_SMI: "Telemetry for the affected GPU was read from the local NVIDIA driver via nvidia-smi; DCGM field names denote the equivalent canonical signals.",
+                 SOURCE_AMD: "Telemetry for the affected GPU was read from the local AMD driver via amd-smi; DCGM field names denote the equivalent canonical signals."}
 
         def touches(ref):
-            return any(u in ref for u in smi_only)
+            return next((src for u, src in local_only.items() if u in ref), "")
 
         for inc in incidents:
-            changed = False
+            via = ""
             for lst in (inc.get("supporting_evidence") or [], inc.get("contradicting_evidence") or []):
                 for ev in lst:
-                    if ev.get("source") == "dcgm_exporter" and touches(ev.get("object_ref", "")):
-                        ev["source"] = "nvidia_smi"
-                        changed = True
-            if not changed:
-                changed = any(touches(r) for r in inc.get("affected_resources") or [])
-            if changed:
-                inc.setdefault("observed_facts", []).append(note)
+                    src = touches(ev.get("object_ref", ""))
+                    if ev.get("source") == "dcgm_exporter" and src:
+                        ev["source"] = src
+                        via = src
+            if not via:
+                via = next((touches(r) for r in inc.get("affected_resources") or [] if touches(r)), "")
+            if via:
+                inc.setdefault("observed_facts", []).append(notes[via])
 
     def _track_incidents(self, incidents, now):
         nxt = {}
@@ -2138,7 +2443,14 @@ class Engine:
                 if not inc.get("first_seen_at"):
                     inc["first_seen_at"] = iso(now)
                 sev = "inconclusive" if inc["eval_status"] == "inconclusive" else inc["severity"]
-                self._add_activity(now, sev, "incident", f"Incident opened [{inc['rule_id']}]", inc["title"])
+                since = self.restored_first_seen.pop(fp, None)
+                if since:
+                    # Still firing after a GPU Lens restart: keep its original age instead of reporting a new incident.
+                    if (parse_iso(since) or now) < (parse_iso(inc["first_seen_at"]) or now):
+                        inc["first_seen_at"] = since
+                    self._add_activity(now, sev, "incident", f"Incident still open [{inc['rule_id']}]", inc["title"] + " — open since before GPU Lens restarted.")
+                else:
+                    self._add_activity(now, sev, "incident", f"Incident opened [{inc['rule_id']}]", inc["title"])
             if (parse_iso(inc.get("last_seen_at")) or now) < now:
                 inc["last_seen_at"] = iso(now)
             nxt[fp] = copy.deepcopy(inc)
@@ -2151,6 +2463,8 @@ class Engine:
                 self._add_activity(now, "success", "incident", f"Incident resolved [{prev['rule_id']}]", f"{prev['title']} — no longer firing after {human}.")
         self.resolved = self.resolved[-MAX_RESOLVED:]
         self.open = nxt
+        if self.tick >= 3:
+            self.restored_first_seen = {}
         return incidents
 
     def _build_views(self, uuids, incidents):
@@ -2170,7 +2484,8 @@ class Engine:
                  "is_stale": d["is_stale"], "latest": lat, "fb_used_percent": round1(lat["fb_used_mib"] / fb_total * 100.0) if fb_total > 0 else None,
                  "sources": list(ex["sources"]), "fan_speed_percent": ex["fan_speed_percent"], "pstate": ex["pstate"], "throttle_reasons": list(ex["throttle_reasons"]),
                  "pcie": ex["pcie"], "processes": list(ex["processes"]), "emulated": ex["emulated"], "mig_profile": ex["mig_profile"],
-                 "sample_count": len(ds["samples"]), "first_seen_at": iso(ds["first_seen"]), "incident_ids": [], "worst_severity": ""}
+                 "sample_count": len(ds["samples"]), "first_seen_at": iso(ds["first_seen"]), "incident_ids": [], "worst_severity": "",
+                 "exported_metrics": sorted({k for o in ds["obs"].values() for k, ok in (o.get("exported") or {}).items() if ok and k != LAB_MARKER})}
             worst = 0
             for inc in incidents:
                 if any(u in r for r in inc.get("affected_resources") or []):
@@ -2249,7 +2564,7 @@ class Engine:
             budget[0] -= 1
             self._add_activity(now, sev, kind, title, detail)
 
-        for sid in (SOURCE_HOST, SOURCE_SMI, SOURCE_DCGM, SOURCE_PROM, SOURCE_K8S):
+        for sid in (SOURCE_HOST, SOURCE_SMI, SOURCE_AMD, SOURCE_DCGM, SOURCE_PROM, SOURCE_K8S):
             st = self.src.get(sid)
             if not st:
                 continue
@@ -2365,8 +2680,8 @@ class Engine:
             cur["bearer_token"] = tok.strip()
         return cur
 
-    CONFIG_PATCH_KEYS = {"cluster_name", "interval_seconds", "nvidia_smi_enabled", "host_vitals_enabled", "dcgm_exporter", "prometheus", "kubernetes"}
-    CONNECTION_KEYS = {"cluster_name", "nvidia_smi_enabled", "host_vitals_enabled", "dcgm_exporter", "prometheus", "kubernetes"}
+    CONFIG_PATCH_KEYS = {"cluster_name", "interval_seconds", "nvidia_smi_enabled", "amd_smi_enabled", "host_vitals_enabled", "dcgm_exporter", "prometheus", "kubernetes"}
+    CONNECTION_KEYS = {"cluster_name", "nvidia_smi_enabled", "amd_smi_enabled", "host_vitals_enabled", "dcgm_exporter", "prometheus", "kubernetes"}
 
     def update_config(self, patch):
         unknown = sorted(set(patch) - self.CONFIG_PATCH_KEYS)
@@ -2383,7 +2698,7 @@ class Engine:
                     nxt["interval_seconds"] = float(patch["interval_seconds"])
                 except (TypeError, ValueError):
                     raise LiveError("invalid JSON payload: interval_seconds must be a number")
-            for k in ("nvidia_smi_enabled", "host_vitals_enabled"):
+            for k in ("nvidia_smi_enabled", "amd_smi_enabled", "host_vitals_enabled"):
                 if patch.get(k) is not None:
                     if not isinstance(patch[k], bool):
                         raise LiveError(f"invalid JSON payload: {k} must be a boolean")
@@ -2622,6 +2937,21 @@ class Engine:
                 elif res["gpus"]:
                     b.add("nvsmi.coverage", "Hardware-fault signal coverage", "pass", "Local GPUs are also covered by DCGM telemetry, so fault counters are available.")
 
+        # amd-smi (experimental)
+        b.group("amd", "Local AMD driver (amd-smi, experimental)")
+        amd_st = self.src.get(SOURCE_AMD)
+        if amd_st is not None and b.gate(amd_st, "amd.query", "Driver query"):
+            res = amd_st["amd"]
+            if res is None:
+                b.add("amd.query", "Driver query", "pending", "Checking…")
+            else:
+                s = amd_st["status"]
+                b.add("amd.query", "Driver query", "warn" if s["state"] == "degraded" else "pass", f"{s['detail']} — {res['binary']}.", s["hint"], s["last_latency_ms"])
+                if f["amd"] > 0:
+                    b.add("amd.coverage", "Hardware-fault signal coverage", "warn",
+                          f"{P(f['amd'], 'AMD GPU is', 'AMD GPUs are')} read through amd-smi: utilization, VRAM, temperature, power and ECC counts are evaluated; NVIDIA-specific signals (Xid, NVLink, row remapping) have no AMD equivalent in GPU Lens yet.",
+                          "AMD support is experimental. Please report what you see on real hardware.")
+
         # dcgm
         b.group("dcgm", "DCGM exporter")
         dst = self.src[SOURCE_DCGM]
@@ -2790,6 +3120,8 @@ class Engine:
               "last_tick_at": iso(self.last_tick_at) if self.last_tick_at else None, "last_tick_duration_ms": round(self.last_tick_dur * 1000.0, 3),
               "server_time": iso(now), "config_mutable": bool(access.get("config_mutable")) and enabled,
               "config_mutable_reason": access.get("reason", ""), "auto_start": self.cfg["auto_start"], "hostname": self.hostname,
+              "role": access.get("role") or "admin", "auth_enabled": bool(access.get("auth_enabled")), "user": access.get("user", ""),
+              "can_operate": bool(access.get("can_operate", True)),
               "emulated": any(s["status"]["emulated"] and s["status"]["state"] in ("connected", "degraded") for s in self.src.values())}
         return st
 
@@ -2806,8 +3138,8 @@ class Engine:
                    "sources": [], "host": self.host_vitals, "gpus": self.gpu_views, "processes": self.processes, "nodes": self.view_nodes,
                    "pods": self.view_pods, "events": [], "activity_last_seq": self.activity_seq, "resolved_incidents": [],
                    "thresholds": dict(self.thresholds), "threshold_defaults": dict(self.base_thresholds), "rules": self.rt.get_rule_definitions(self.thresholds),
-                   "notes": []}
-            for sid in (SOURCE_SMI, SOURCE_DCGM, SOURCE_PROM, SOURCE_K8S, SOURCE_HOST):
+                   "notes": [], "alerts": alert_status(self.alerts), "persistence": self._persistence_status()}
+            for sid in (SOURCE_SMI, SOURCE_AMD, SOURCE_DCGM, SOURCE_PROM, SOURCE_K8S, SOURCE_HOST):
                 st = self.src.get(sid)
                 if st:
                     s = dict(st["status"])
@@ -2834,6 +3166,386 @@ class Engine:
             if self.overrides:
                 out["notes"].append("Live rule thresholds differ from the configured defaults. The simulated demo is not affected.")
             return json.loads(json.dumps(out, default=str))
+
+
+    # ----- alerting, audit, durable state, fleet summary, self-metrics (mirrors internal/live/extras.go) -----
+    def set_alerter(self, notifier):
+        with self.lock:
+            self.alerts = notifier
+
+    def alert_status(self):
+        return alert_status(self.alerts)
+
+    def test_alerts(self):
+        with self.lock:
+            n = self.alerts
+            meta = {"cluster": self.cfg["cluster_name"] or ("live@" + self.hostname), "data_mode": "live", "version": VERSION}
+            if self.snapshot:
+                meta["cluster"], meta["data_mode"] = self.snapshot["cluster_name"], self.snapshot["data_mode"]
+        if n is None:
+            raise LiveError("no alert destination is configured: start GPU Lens with --alert-slack-webhook and/or --alert-webhook-url", 409)
+        res = n.send_test(meta)
+        ok = sum(1 for r in res if r["ok"])
+        with self.lock:
+            self._add_activity(utcnow(), "success" if ok == len(res) else "warning", "alert", "Test alert sent", f"{ok} of {len(res)} destination(s) accepted it.")
+        return res
+
+    def add_audit(self, title, detail):
+        with self.lock:
+            self._add_activity(utcnow(), "info", "audit", title, detail)
+
+    def is_running(self):
+        with self.lock:
+            return self.running
+
+    def summary(self):
+        with self.lock:
+            now = utcnow()
+            pf = self._preflight(now)
+            st = self._status(now, {})
+            out = {"schema": "gpulens.summary/v1", "cluster": self.cfg["cluster_name"] or ("live@" + self.hostname), "hostname": self.hostname,
+                   "version": VERSION, "runtime": RUNTIME, "state": st["state"], "verdict": pf["verdict"], "verdict_text": pf["verdict_text"],
+                   "fleet_status": "", "data_mode": "live", "emulated": st["emulated"], "gpus_total": 0, "gpus_fresh": 0, "nodes": len(self.view_nodes),
+                   "incidents": {"critical": 0, "warning": 0, "info": 0}, "top_incidents": [], "sources_connected": 0, "sources_enabled": 0,
+                   "last_cycle_at": st["last_tick_at"], "generated_at": iso(now)}
+            if self.snapshot:
+                out["data_mode"] = self.snapshot["data_mode"]
+                out["cluster"] = self.snapshot["cluster_name"] or out["cluster"]
+            if self.overview:
+                out["fleet_status"] = self.overview["fleet_health_status"]
+                for inc in self.overview["active_incidents"]:
+                    out["incidents"][inc["severity"]] = out["incidents"].get(inc["severity"], 0) + 1
+                    if len(out["top_incidents"]) < 3:
+                        out["top_incidents"].append(f"[{inc['severity']}] {inc['title']}")
+            for g in self.gpu_views:
+                out["gpus_total"] += 1
+                out["gpus_fresh"] += 0 if g.get("is_stale") else 1
+            for sid, src in self.src.items():
+                s = src["status"]
+                if sid == SOURCE_HOST or not s["enabled"]:
+                    continue
+                if not (src["ever"] or (s["explicit"] and sid not in LOCAL_DRIVER_SOURCES) or s["state"] == "error"):
+                    continue
+                out["sources_enabled"] += 1
+                out["sources_connected"] += 1 if s["state"] in ("connected", "degraded") else 0
+            return json.loads(json.dumps(out, default=str))
+
+    def metrics_snapshot(self):
+        with self.lock:
+            open_by = {"critical": 0, "warning": 0, "info": 0}
+            for inc in self.open.values():
+                open_by[inc["severity"]] = open_by.get(inc["severity"], 0) + 1
+            return {"enabled": self.cfg["enabled"], "running": self.running, "tick": self.tick, "last_tick_at": self.last_tick_at,
+                    "last_tick_dur": self.last_tick_dur, "interval": self.cfg["interval_seconds"],
+                    "sources": [{"id": sid, "enabled": st["status"]["enabled"], "state": st["status"]["state"],
+                                 "up": st["status"]["state"] in ("connected", "degraded"), "latency_ms": st["status"]["last_latency_ms"] or 0.0}
+                                for sid, st in sorted(self.src.items())],
+                    "gpus_fresh": sum(1 for g in self.gpu_views if not g.get("is_stale")), "gpus_stale": sum(1 for g in self.gpu_views if g.get("is_stale")),
+                    "open": open_by, "resolved": len(self.resolved), "overrides": len(self.overrides), "guard_ok": bool(self.guard["ok"]),
+                    "alert_counters": self.alerts.counters() if self.alerts else {}, "persistence": bool(self.state_path),
+                    "state_saved_at": self.state_saved_at, "state_err": self.state_err}
+
+    def _persistence_status(self):
+        enabled = bool(self.state_path)
+        return {"enabled": enabled, "path": self.state_path, "loaded_at": iso(self.state_loaded_at) if self.state_loaded_at else None,
+                "saved_at": iso(self.state_saved_at) if self.state_saved_at else None, "last_error": self.state_err,
+                "note": ("Threshold overrides, the resolved-incident log, open-incident ages and the alert record survive restarts. Single-node file; not shared between replicas."
+                         if enabled else "Live state is kept in memory only. Start with --live-state-file to keep thresholds, resolved incidents and alert history across restarts.")}
+
+    def set_state_file(self, path):
+        with self.lock:
+            self.state_path = path or ""
+            if not path or not os.path.exists(path):
+                return
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    doc = json.load(f)
+                if doc.get("format") != STATE_FORMAT:
+                    raise ValueError("format")
+            except Exception:
+                self.state_err = "the live state file is not in a format this version understands; starting fresh"
+                raise LiveError(self.state_err)
+            ov = doc.get("threshold_overrides") or {}
+            if ov:
+                try:
+                    self.set_thresholds(ov, reset=True)
+                    self.activity, self.activity_seq = [], 0
+                except LiveError:
+                    pass
+            self.restored_resolved = list(doc.get("resolved_incidents") or [])[-MAX_RESOLVED:]
+            self.resolved = list(self.restored_resolved)
+            self.restored_first_seen = dict(doc.get("open_first_seen") or {})
+            if self.alerts is not None:
+                self.alerts.restore(doc.get("alerts") or {})
+            self.state_loaded_at = utcnow()
+
+    def save_state(self):
+        with self.lock:
+            path = self.state_path
+            if not path:
+                return
+            first_seen = {fp: inc.get("first_seen_at") for fp, inc in self.open.items()}
+            for fp, t in self.restored_first_seen.items():
+                first_seen.setdefault(fp, t)
+            doc = {"format": STATE_FORMAT, "saved_at": iso(utcnow()), "gpulens_version": VERSION, "threshold_overrides": dict(self.overrides),
+                   "resolved_incidents": copy.deepcopy(self.resolved), "open_first_seen": first_seen,
+                   "alerts": self.alerts.snapshot() if self.alerts else {}}
+        try:
+            d = os.path.dirname(os.path.abspath(path))
+            os.makedirs(d, exist_ok=True)
+            tmp = os.path.join(d, f".gpulens-live-state-{os.getpid()}.tmp")
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(doc, f, indent=2, default=str)
+            os.replace(tmp, path)
+            with self.lock:
+                self.state_err, self.state_saved_at = "", utcnow()
+        except OSError as e:
+            with self.lock:
+                self.state_err = sanitize_error(e)
+
+
+STATE_FORMAT = "gpulens.live-state/v1"
+
+
+# ---------------------------------------------------------------------------------------------
+# Alerting (mirrors internal/alert): Slack + generic JSON webhook on incident open / resolve / severity change
+# ---------------------------------------------------------------------------------------------
+ALERT_SCHEMA = "gpulens.alert/v1"
+_SEV_RANK = {"info": 1, "warning": 2, "critical": 3}
+
+
+def _check_alert_url(what, raw, https_only):
+    u = urllib.parse.urlparse((raw or "").strip())
+    if not u.netloc:
+        raise LiveError(f"alert: {what} is not a valid URL")
+    if u.scheme != "https" and (https_only or u.scheme != "http"):
+        raise LiveError(f"alert: {what} must use https" if https_only else f"alert: {what} must use http or https")
+    if u.username or u.password:
+        raise LiveError(f"alert: {what} must not embed credentials; use the signing secret instead")
+
+
+def redact_url(raw):
+    u = urllib.parse.urlparse(raw)
+    host = u.hostname or ""
+    if u.port:
+        host += f":{u.port}"
+    return f"{u.scheme}://{host}" + ("" if u.path in ("", "/") else "/…")
+
+
+def slack_message(ev):
+    esc = lambda t: (t or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    prefix = "[EMULATED] " if ev.get("emulated") else ""
+    cluster = ev.get("cluster") or "GPU Lens"
+    emoji = {"critical": "🔴", "warning": "🟠"}
+    if ev["type"] == "test":
+        headline, body = "🧪 GPU Lens test alert", ev.get("message", "")
+    else:
+        inc = ev.get("incident") or {}
+        sev = (inc.get("severity") or "").upper()
+        if ev["type"] == "incident.opened":
+            headline = f"{emoji.get(inc.get('severity'), '🔵')} Incident opened · {sev}"
+        elif ev["type"] == "incident.resolved":
+            d = ev.get("duration_seconds") or 0
+            headline = "✅ Incident resolved" + ((" after " + (f"{d:.0f}s" if d < 90 else (f"{d / 60:.0f} min" if d < 5400 else f"{d / 3600:.1f} h"))) if d > 0 else "")
+        else:
+            headline = f"{emoji.get(inc.get('severity'), '🔵')} Severity changed · {(ev.get('previous_severity') or '').upper()} → {sev}"
+        body = "*" + esc(inc.get("title")) + "*"
+        summary = inc.get("summary") or ""
+        if summary:
+            body += "\n" + esc(summary if len(summary) <= 600 else summary[:599] + "…")
+    bits = ["cluster `" + esc(cluster) + "`"]
+    if ev.get("incident") and ev["incident"].get("rule_id"):
+        bits.insert(0, "rule `" + esc(ev["incident"]["rule_id"]) + "`")
+    if ev.get("emulated"):
+        bits.append("*EMULATED data (Live Lab), not real hardware*")
+    if ev.get("console_url"):
+        bits.append("<" + ev["console_url"] + "|Open in GPU Lens>")
+    return {"text": f"{prefix}{headline} on {cluster}",
+            "blocks": [{"type": "section", "text": {"type": "mrkdwn", "text": "*" + esc(prefix + headline) + "*\n" + body}},
+                       {"type": "context", "elements": [{"type": "mrkdwn", "text": " · ".join(bits)}]}]}
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+class AlertNotifier:
+    def __init__(self, slack_url="", webhook_url="", secret="", min_severity="warning", public_url=""):
+        import queue
+        min_severity = (min_severity or "warning").strip().lower()
+        if min_severity not in _SEV_RANK:
+            raise LiveError(f"alert: min severity must be info, warning or critical, got {min_severity!r}")
+        if slack_url:
+            _check_alert_url("Slack webhook", slack_url, True)
+        if webhook_url:
+            _check_alert_url("alert webhook", webhook_url, False)
+        if public_url:
+            _check_alert_url("public URL", public_url, False)
+        self.min_severity, self.public_url = min_severity, (public_url or "").strip().rstrip("/")
+        self.dests = []
+        for kind, url in (("slack", slack_url), ("webhook", webhook_url)):
+            if url:
+                self.dests.append({"kind": kind, "url": url.strip(), "secret": secret if kind == "webhook" else "",
+                                   "status": {"kind": kind, "target": redact_url(url.strip()), "signed": bool(secret) and kind == "webhook", "sent": 0, "failed": 0,
+                                              "dropped": 0, "last_event": "", "last_attempt_at": None, "last_success_at": None, "last_error": ""}})
+        self.lock = threading.Lock()
+        self.known, self.open_refs = {}, {}
+        self.q = queue.Queue(maxsize=256)
+        self.opener = urllib.request.build_opener(_NoRedirect())
+        threading.Thread(target=self._worker, daemon=True).start()
+
+    @staticmethod
+    def create(slack_url, webhook_url, secret, min_severity, public_url):
+        if not (slack_url or webhook_url):
+            for v in (min_severity,):
+                if (v or "warning").strip().lower() not in _SEV_RANK:
+                    raise LiveError(f"alert: min severity must be info, warning or critical, got {v!r}")
+            return None
+        return AlertNotifier(slack_url, webhook_url, secret, min_severity, public_url)
+
+    def _event(self, kind, meta, ref):
+        ev = {"schema": ALERT_SCHEMA, "type": kind, "delivery_id": os.urandom(12).hex(), "timestamp": iso(utcnow()), "cluster": meta.get("cluster", ""),
+              "data_mode": meta.get("data_mode", ""), "emulated": meta.get("data_mode") == "live_emulated", "gpulens_version": meta.get("version", VERSION)}
+        if ref is not None:
+            ev["incident"] = ref
+        if self.public_url:
+            ev["console_url"] = self.public_url + "/?live_tab=incidents"
+        return ev
+
+    @staticmethod
+    def _ref(inc):
+        return {k: inc.get(k) for k in ("id", "fingerprint", "rule_id", "rule_name", "category", "severity", "eval_status", "evidence_strength",
+                                        "title", "summary", "affected_resources", "first_seen_at")}
+
+    def _enqueue(self, ev):
+        import queue
+        for d in self.dests:
+            try:
+                self.q.put_nowait((d, ev))
+            except queue.Full:
+                d["status"]["dropped"] += 1
+
+    def sync(self, incidents, meta, allow_resolve):
+        floor = _SEV_RANK[self.min_severity]
+        with self.lock:
+            seen = set()
+            for inc in incidents:
+                fp = inc.get("fingerprint") or inc.get("id")
+                seen.add(fp)
+                sev, ref = inc["severity"], self._ref(inc)
+                prev = self.known.get(fp)
+                if prev is None:
+                    t = {"severity": sev, "notified": _SEV_RANK.get(sev, 0) >= floor}
+                    if t["notified"]:
+                        self._enqueue(self._event("incident.opened", meta, ref))
+                    self.known[fp] = t
+                elif prev["severity"] != sev:
+                    t = {"severity": sev, "notified": prev["notified"]}
+                    if prev["notified"]:
+                        ev = self._event("incident.severity_changed", meta, ref)
+                        ev["previous_severity"] = prev["severity"]
+                        self._enqueue(ev)
+                    elif _SEV_RANK.get(sev, 0) >= floor:
+                        t["notified"] = True
+                        self._enqueue(self._event("incident.opened", meta, ref))
+                    self.known[fp] = t
+                self.open_refs[fp] = ref
+            if not allow_resolve:
+                return
+            for fp in sorted(set(self.known) - seen):
+                t, ref = self.known.pop(fp), self.open_refs.pop(fp, None)
+                if t["notified"] and ref is not None:
+                    ev = self._event("incident.resolved", meta, ref)
+                    first = parse_iso(ref.get("first_seen_at"))
+                    if first:
+                        ev["duration_seconds"] = max(0.0, (utcnow() - first).total_seconds())
+                    self._enqueue(ev)
+
+    def _post(self, d, ev, timeout):
+        import hmac, hashlib
+        body = json.dumps(slack_message(ev) if d["kind"] == "slack" else ev).encode("utf-8")
+        req = urllib.request.Request(d["url"], data=body, method="POST", headers={"Content-Type": "application/json", "User-Agent": "gpu-lens/" + VERSION})
+        if d["kind"] == "webhook":
+            req.add_header("X-GPULens-Event", ev["type"])
+            req.add_header("X-GPULens-Delivery", ev["delivery_id"])
+            if d["secret"]:
+                req.add_header("X-GPULens-Signature-256", "sha256=" + hmac.new(d["secret"].encode(), body, hashlib.sha256).hexdigest())
+        try:
+            with self.opener.open(req, timeout=timeout) as resp:
+                resp.read(65536)
+                if not 200 <= resp.status <= 299:
+                    return f"HTTP {resp.status}"
+        except urllib.error.HTTPError as e:
+            return f"HTTP {e.code}"
+        except urllib.error.URLError as e:
+            return "timed out" if isinstance(e.reason, socket.timeout) else "request failed: " + sanitize_error(e.reason)
+        except (socket.timeout, TimeoutError):
+            return "timed out"
+        except Exception as e:
+            return "request failed: " + sanitize_error(e)
+        return ""
+
+    def _record(self, d, kind, err):
+        with self.lock:
+            st, now = d["status"], iso(utcnow())
+            st["last_attempt_at"], st["last_event"] = now, kind
+            if err:
+                st["failed"] += 1
+                st["last_error"] = err
+            else:
+                st["sent"] += 1
+                st["last_success_at"], st["last_error"] = now, ""
+
+    def _worker(self):
+        while True:
+            d, ev = self.q.get()
+            err, delay = "", 1.0
+            for attempt in range(3):
+                err = self._post(d, ev, 10.0)
+                if not err or attempt == 2:
+                    break
+                time.sleep(delay)
+                delay *= 4
+            self._record(d, ev["type"], err)
+
+    def send_test(self, meta):
+        ev = self._event("test", meta, None)
+        ev["message"] = "Test alert from GPU Lens. If you can read this, alert delivery works."
+        out = []
+        for d in self.dests:
+            err = self._post(d, ev, 5.0)
+            self._record(d, "test", err)
+            out.append({"kind": d["kind"], "target": d["status"]["target"], "ok": not err, "error": err})
+        return out
+
+    def status(self):
+        with self.lock:
+            return {"enabled": True, "min_severity": self.min_severity, "public_url": self.public_url, "tracked_incidents": len(self.known),
+                    "destinations": [dict(d["status"]) for d in self.dests],
+                    "note": "Alerts are sent when a live incident at or above the minimum severity opens, changes severity or resolves. Destinations are set at startup only."}
+
+    def counters(self):
+        with self.lock:
+            return {d["kind"]: (d["status"]["sent"], d["status"]["failed"], d["status"]["dropped"]) for d in self.dests}
+
+    def snapshot(self):
+        with self.lock:
+            return {fp: {"severity": t["severity"], "notified": t["notified"], "incident": self.open_refs.get(fp, {})} for fp, t in self.known.items()}
+
+    def restore(self, rec):
+        with self.lock:
+            for fp, p in (rec or {}).items():
+                self.known[fp] = {"severity": p.get("severity", ""), "notified": bool(p.get("notified"))}
+                self.open_refs[fp] = p.get("incident") or {}
+
+
+def alert_status(n):
+    if n is None:
+        return {"enabled": False, "min_severity": "warning", "public_url": "", "tracked_incidents": 0, "destinations": [],
+                "note": "No alert destination is configured. Start GPU Lens with --alert-slack-webhook and/or --alert-webhook-url (or GPULENS_ALERT_SLACK_WEBHOOK_URL / GPULENS_ALERT_WEBHOOK_URL)."}
+    return n.status()
 
 
 # ---------------------------------------------------------------------------------------------
@@ -2896,21 +3608,122 @@ def _same_origin(headers):
     return headers.get("Sec-Fetch-Site", "") in ("", "same-origin", "none")
 
 
+# ---------------------------------------------------------------------------------------------
+# Audit log (mirrors internal/audit): who changed what, including refused attempts
+# ---------------------------------------------------------------------------------------------
+class AuditLog:
+    MAX = 1000
+
+    def __init__(self, path=""):
+        self.path, self.entries, self.seq, self.lock = path or "", [], 0, threading.Lock()
+        if not self.path:
+            return
+        if os.path.exists(self.path):
+            with open(self.path, "r", encoding="utf-8") as f:
+                for line in f:
+                    try:
+                        e = json.loads(line)
+                    except ValueError:
+                        continue
+                    if isinstance(e, dict) and int(e.get("seq") or 0) > 0:
+                        self.entries.append(e)
+                        self.seq = max(self.seq, int(e["seq"]))
+            self.entries = self.entries[-self.MAX:]
+        else:
+            os.close(os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600))
+
+    def record(self, actor, role, remote, action, detail, outcome="ok"):
+        with self.lock:
+            self.seq += 1
+            e = {"seq": self.seq, "t": iso(utcnow()), "actor": actor, "role": role, "remote": remote, "action": action, "detail": detail, "outcome": outcome}
+            self.entries = (self.entries + [e])[-self.MAX:]
+            if self.path:
+                try:
+                    fd = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+                    with os.fdopen(fd, "a", encoding="utf-8") as f:
+                        f.write(json.dumps(e) + "\n")
+                except OSError:
+                    pass
+            return e
+
+    def list(self, since=0):
+        with self.lock:
+            return [e for e in self.entries if e["seq"] > since]
+
+
+VIEWER_REASON = "You are signed in with the viewer role, which is read-only. Sign in as an admin to change connections, thresholds or collection."
+VIEWER_DENIED = "your account has the viewer role, which is read-only: ask an admin to make this change"
+
+
+def remote_label(remote_addr, headers):
+    xff = (headers.get("X-Forwarded-For") or "").split(",")[0].strip()
+    return f"{remote_addr} (X-Forwarded-For {xff})" if xff and _is_ip(xff) else remote_addr
+
+
+def describe_patch(doc):
+    parts = []
+    if doc.get("cluster_name") is not None:
+        parts.append(f'cluster name="{doc["cluster_name"]}"')
+    if doc.get("interval_seconds") is not None:
+        parts.append(f"interval={float(doc['interval_seconds']):g}s")
+    for k, label in (("nvidia_smi_enabled", "nvidia-smi"), ("amd_smi_enabled", "amd-smi"), ("host_vitals_enabled", "host vitals")):
+        if doc.get(k) is not None:
+            parts.append(f"{label}={str(doc[k]).lower()}")
+    for key, name in (("dcgm_exporter", "DCGM"), ("prometheus", "Prometheus"), ("kubernetes", "Kubernetes")):
+        p = doc.get(key)
+        if not isinstance(p, dict):
+            continue
+        bits = []
+        if p.get("enabled") is not None:
+            bits.append(f"enabled={str(p['enabled']).lower()}")
+        if p.get("endpoint") is not None:
+            ep = str(p["endpoint"]).strip()
+            u = urllib.parse.urlparse(ep)
+            if u.username or u.password:
+                ep = u._replace(netloc=u.hostname + (f":{u.port}" if u.port else "")).geturl()
+            bits.append("endpoint=" + (ep or "(default probe)"))
+        if isinstance(p.get("bearer_token"), str) and p["bearer_token"].strip():
+            bits.append("token set")
+        if p.get("clear_token"):
+            bits.append("token cleared")
+        if bits:
+            parts.append(f"{name} ({', '.join(bits)})")
+    return "; ".join(parts) or "no changes"
+
+
 class LiveAPI:
     """Routes and guards for the live endpoints. `handle` returns (http_status, json_payload)."""
 
-    def __init__(self, engine):
+    def __init__(self, engine, audit=None, auth_enabled=False):
         self.engine = engine
+        self.audit = audit or AuditLog()
+        self.auth_enabled = auth_enabled
 
-    def access(self, remote_addr, headers):
-        if self.engine.allow_remote_config():
-            return {"config_mutable": True, "reason": ""}
-        if _is_loopback(remote_addr) and not _forwarded(headers) and _host_is_local(headers):
-            return {"config_mutable": True, "reason": ""}
-        return {"config_mutable": False, "reason": LOCAL_ONLY_REASON}
+    def access(self, remote_addr, headers, principal=None):
+        user, role = principal or ("anonymous", "admin")
+        base = {"role": role, "auth_enabled": self.auth_enabled, "user": user if self.auth_enabled else "", "can_operate": role == "admin",
+                "config_mutable": False, "reason": ""}
+        if role != "admin":
+            base["reason"] = VIEWER_REASON
+            return base
+        if self.engine.allow_remote_config() or (_is_loopback(remote_addr) and not _forwarded(headers) and _host_is_local(headers)):
+            base["config_mutable"] = True
+            return base
+        base["reason"] = LOCAL_ONLY_REASON
+        return base
 
-    def handle(self, method, path, query, headers, remote_addr, body):
-        routes = {"status": "GET", "state": "GET", "start": "POST", "stop": "POST", "recheck": "POST", "config": "POST", "thresholds": "POST"}
+    def _record(self, principal, remote, action, detail, outcome="ok"):
+        user, role = principal or ("anonymous", "admin")
+        return self.audit.record(user, role, remote, action, detail, outcome)
+
+    def _done(self, principal, remote, action, title, detail):
+        e = self._record(principal, remote, action, detail)
+        self.engine.add_audit(title, f"{detail} — by {e['actor']} ({e['role']}) from {e['remote']}.")
+        self.engine.save_state()
+
+    def handle(self, method, path, query, headers, remote_addr, body, principal=None):
+        routes = {"status": "GET", "state": "GET", "start": "POST", "stop": "POST", "recheck": "POST", "config": "POST", "thresholds": "POST",
+                  "alerts": "GET", "alerts/test": "POST", "summary": "GET"}
         name = path[len(LIVE_PREFIX):]
         if name not in routes:
             return 404, {"error": "not found"}
@@ -2924,11 +3737,20 @@ class LiveAPI:
         ct = (headers.get("Content-Type") or "").split(";")[0].strip().lower()
         if method == "POST" and ct != "application/json":
             return 415, {"error": "live API requires Content-Type: application/json"}
-        access = self.access(remote_addr, headers)
+        access = self.access(remote_addr, headers, principal)
+        remote = remote_label(remote_addr, headers)
         e = self.engine
+        admin_only = {"stop": "live.stop", "recheck": "live.recheck", "config": "live.config", "thresholds": "live.thresholds", "alerts/test": "alerts.test"}
+        if name in admin_only and access["role"] != "admin":
+            self._record(principal, remote, admin_only[name], "refused: the viewer role is read-only", "denied")
+            return 403, {"error": VIEWER_DENIED}
         try:
             if name == "status":
                 return 200, e.status(access)
+            if name == "summary":
+                return 200, e.summary()
+            if name == "alerts":
+                return 200, e.alert_status()
             if name == "state":
                 return 200, e.state(_int(query.get("since")), _int(query.get("activity_since")), access)
             doc = {}
@@ -2945,20 +3767,50 @@ class LiveAPI:
                 unknown = sorted(set(doc) - {"interval_seconds"})
                 if unknown:
                     return 400, {"error": f'invalid JSON payload: json: unknown field "{unknown[0]}"'}
+                if float(doc.get("interval_seconds") or 0) > 0 and access["role"] != "admin":
+                    # Viewers may resume watching, but not change the refresh interval.
+                    self._record(principal, remote, "live.start", "refused: the viewer role is read-only", "denied")
+                    return 403, {"error": VIEWER_DENIED}
+                was_running = e.is_running()
                 e.start(float(doc.get("interval_seconds") or 0))
+                if not was_running:
+                    self._record(principal, remote, "live.start", "Live collection started.")
             elif name == "stop":
                 e.stop("Stopped from the console.")
+                self._done(principal, remote, "live.stop", "Collection paused", "Live collection stopped from the console")
             elif name == "recheck":
                 e.recheck()
+                self._record(principal, remote, "live.recheck", "Immediate re-check of every source.")
             elif name == "config":
                 if set(doc) & Engine.CONNECTION_KEYS and not access["config_mutable"]:
+                    self._record(principal, remote, "live.config", "refused: " + describe_patch(doc), "denied")
                     return 403, {"error": access["reason"]}
-                e.update_config(doc)
+                try:
+                    e.update_config(doc)
+                except LiveError as ex:
+                    self._record(principal, remote, "live.config", f"rejected: {describe_patch(doc)}: {ex}", "error")
+                    raise
+                self._done(principal, remote, "live.config", "Live configuration changed", describe_patch(doc))
             elif name == "thresholds":
                 unknown = sorted(set(doc) - {"overrides", "reset"})
                 if unknown:
                     return 400, {"error": f'invalid JSON payload: json: unknown field "{unknown[0]}"'}
-                e.set_thresholds(doc.get("overrides") or {}, bool(doc.get("reset")))
+                ov = doc.get("overrides") or {}
+                keys = ", ".join(sorted(f"{k}={float(v):g}" if isinstance(v, (int, float)) and not isinstance(v, bool) else f"{k}={v}" for k, v in ov.items()))
+                detail = "set " + keys
+                if doc.get("reset"):
+                    detail = "reset all live thresholds to defaults" + (", then set " + keys if keys else "")
+                try:
+                    e.set_thresholds(ov, bool(doc.get("reset")))
+                except LiveError as ex:
+                    self._record(principal, remote, "live.thresholds", f"rejected: {detail}: {ex}", "error")
+                    raise
+                self._done(principal, remote, "live.thresholds", "Thresholds changed", detail)
+            elif name == "alerts/test":
+                res = e.test_alerts()
+                ok = sum(1 for r in res if r["ok"])
+                self._record(principal, remote, "alerts.test", f"test alert accepted by {ok} of {len(res)} destination(s)")
+                return 200, {"results": res, "status": e.alert_status()}
             return 200, e.state(0, 0, access)
         except LiveError as ex:
             return ex.status, {"error": str(ex)}
@@ -2991,9 +3843,290 @@ def add_cli_args(parser):
     g.add_argument("--kubernetes-ca-file", default="", help="PEM CA bundle for the Kubernetes API server")
     g.add_argument("--nvidia-smi-path", default="", help="path to nvidia-smi (default: PATH and well-known locations)")
     g.add_argument("--no-nvidia-smi", action="store_true", help="do not query the local NVIDIA driver")
+    g.add_argument("--amd-smi-path", default="", help="path to amd-smi for AMD GPUs (default: PATH and /opt/rocm/bin) — experimental")
+    g.add_argument("--no-amd-smi", action="store_true", help="do not query the local AMD driver")
     g.add_argument("--no-host-vitals", action="store_true", help="do not read local host vitals (/proc, /sys)")
     g.add_argument("--live-allow-remote-config", action="store_true", help="allow non-local browsers to change live connection settings")
     g.add_argument("--no-live", action="store_true", help="disable the live console entirely")
+    a = parser.add_argument_group("access control, audit, alerting, durable state, fleet")
+    a.add_argument("--basic-auth-user", default="", help="require HTTP basic auth: admin user name (full access)")
+    a.add_argument("--basic-auth-pass", default="", help="admin password (prefer --basic-auth-pass-file or GPULENS_BASIC_AUTH_PASS)")
+    a.add_argument("--basic-auth-pass-file", default="", help="file holding the admin password")
+    a.add_argument("--viewer-user", default="", help="optional read-only viewer user name (needs the admin account)")
+    a.add_argument("--viewer-pass", default="", help="viewer password (prefer --viewer-pass-file or GPULENS_VIEWER_PASS)")
+    a.add_argument("--viewer-pass-file", default="", help="file holding the viewer password")
+    a.add_argument("--audit-log-file", default="", help="append the audit log (who changed what) to this JSON-lines file")
+    a.add_argument("--live-state-file", default="", help="keep live thresholds, resolved incidents and alert history in this file across restarts")
+    a.add_argument("--alert-slack-webhook", default="", help="Slack incoming-webhook URL for incident alerts (https)")
+    a.add_argument("--alert-webhook-url", default="", help="generic webhook URL: incident alerts are POSTed as JSON (schema gpulens.alert/v1)")
+    a.add_argument("--alert-webhook-secret", default="", help="sign webhook bodies with HMAC-SHA256 (header X-GPULens-Signature-256)")
+    a.add_argument("--alert-webhook-secret-file", default="", help="file holding the webhook signing secret")
+    a.add_argument("--alert-min-severity", default="warning", help="lowest incident severity that is alerted: info, warning or critical")
+    a.add_argument("--public-url", default="", help="external URL of this console, used for links in alerts")
+    a.add_argument("--peer", action="append", default=[], help="another GPU Lens instance for the Fleet tab, as name=https://host:8080 (repeatable)")
+    a.add_argument("--fleet-interval", type=float, default=15.0, help="seconds between polls of each fleet peer")
+
+
+def _read_secret(path, what):
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            v = f.read().rstrip("\r\n")
+    except OSError as e:
+        raise LiveError(f"cannot read the {what} file {path}: {sanitize_error(e)}")
+    if not v:
+        raise LiveError(f"the {what} file {path} is empty")
+    return v
+
+
+def build_extras(args, env=None):
+    """Resolve the access-control, audit, alerting, durable-state and fleet settings (flags, then GPULENS_* env wins)."""
+    env = os.environ if env is None else env
+    pick = lambda flag, key: (env.get(key) or "").strip() or flag
+    x = {"admin_user": pick(args.basic_auth_user, "GPULENS_BASIC_AUTH_USER"), "admin_pass": pick(args.basic_auth_pass, "GPULENS_BASIC_AUTH_PASS"),
+         "viewer_user": pick(args.viewer_user, "GPULENS_VIEWER_USER"), "viewer_pass": pick(args.viewer_pass, "GPULENS_VIEWER_PASS"),
+         "audit_file": pick(args.audit_log_file, "GPULENS_AUDIT_LOG_FILE"), "state_file": pick(args.live_state_file, "GPULENS_LIVE_STATE_FILE"),
+         "slack": pick(args.alert_slack_webhook, "GPULENS_ALERT_SLACK_WEBHOOK_URL"), "webhook": pick(args.alert_webhook_url, "GPULENS_ALERT_WEBHOOK_URL"),
+         "secret": pick(args.alert_webhook_secret, "GPULENS_ALERT_WEBHOOK_SECRET"), "min_severity": pick(args.alert_min_severity, "GPULENS_ALERT_MIN_SEVERITY"),
+         "public_url": pick(args.public_url, "GPULENS_PUBLIC_URL"), "peers": list(args.peer), "fleet_interval": args.fleet_interval}
+    for flag, key, dest, what in ((args.basic_auth_pass_file, "GPULENS_BASIC_AUTH_PASS_FILE", "admin_pass", "admin password"),
+                                  (args.viewer_pass_file, "GPULENS_VIEWER_PASS_FILE", "viewer_pass", "viewer password"),
+                                  (args.alert_webhook_secret_file, "GPULENS_ALERT_WEBHOOK_SECRET_FILE", "secret", "webhook secret")):
+        path = pick(flag, key)
+        if path:
+            x[dest] = _read_secret(path, what)
+    if env.get("GPULENS_PEERS", "").strip():
+        x["peers"].append(env["GPULENS_PEERS"].strip())
+    if bool(x["admin_user"]) != bool(x["admin_pass"]):
+        raise LiveError("set both the admin user and the admin password, or neither")
+    if bool(x["viewer_user"]) != bool(x["viewer_pass"]):
+        raise LiveError("set both the viewer user and the viewer password, or neither")
+    if x["viewer_user"] and not x["admin_user"]:
+        raise LiveError("a viewer account needs an admin account (--basic-auth-user) as well")
+    if x["viewer_user"] and x["viewer_user"] == x["admin_user"]:
+        raise LiveError("the viewer and admin accounts must have different user names")
+    if x["admin_user"] and len(x["admin_pass"]) < 8:
+        raise LiveError("the admin password must be at least 8 characters")
+    x["peers"] = parse_peers(x["peers"])
+    return x
+
+
+def check_basic_auth(header, extras):
+    """Return (user, role) for valid credentials, or None. Comparisons are constant-time over SHA-256 digests."""
+    import base64, hashlib, hmac
+    if not header or not header.startswith("Basic "):
+        return None
+    try:
+        user, _, pw = base64.b64decode(header[6:].strip()).decode("utf-8").partition(":")
+    except Exception:
+        return None
+    d = lambda v: hashlib.sha256(v.encode("utf-8")).digest()
+    for role, wu, wp in (("admin", extras["admin_user"], extras["admin_pass"]), ("viewer", extras["viewer_user"], extras["viewer_pass"])):
+        if wu and wp:
+            ok_u = hmac.compare_digest(d(user), d(wu))
+            ok_p = hmac.compare_digest(d(pw), d(wp))
+            if ok_u and ok_p:
+                return user, role
+    return None
+
+
+# ---------------------------------------------------------------------------------------------
+# Fleet hub (mirrors internal/fleet): poll other GPU Lens instances' read-only summaries
+# ---------------------------------------------------------------------------------------------
+_PEER_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$")
+
+
+def parse_peers(items):
+    out, seen = [], set()
+    for raw in items:
+        for item in str(raw).split(","):
+            item = item.strip()
+            if not item:
+                continue
+            name, eq, url = item.partition("=")
+            name, url = name.strip(), url.strip()
+            u = urllib.parse.urlparse(url)
+            if not eq or not _PEER_NAME.match(name):
+                raise LiveError(f"fleet: peer {item!r} must look like name=https://host:port")
+            if u.scheme not in ("http", "https") or not u.hostname:
+                raise LiveError(f"fleet: peer {name} has an invalid URL")
+            if name in seen:
+                raise LiveError(f"fleet: duplicate peer name {name}")
+            seen.add(name)
+            out.append({"name": name, "url": url.rstrip("/")})
+    return out
+
+
+def redact_peer(url):
+    u = urllib.parse.urlparse(url)
+    if u.username or u.password:
+        host = u.hostname + (f":{u.port}" if u.port else "")
+        return u._replace(netloc="***@" + host).geturl()
+    return url
+
+
+class FleetHub:
+    def __init__(self, engine, peers, interval=15.0, timeout=5.0):
+        self.engine, self.peers, self.interval = engine, peers, max(1.0, float(interval or 15.0))
+        self.http = ReadOnlyHTTP(timeout)
+        self.lock = threading.Lock()
+        self.state = {p["name"]: {"name": p["name"], "kind": "peer", "url": redact_peer(p["url"]), "reachable": False, "error": "not polled yet",
+                                  "last_ok_at": None, "latency_ms": 0.0, "summary": None} for p in peers}
+
+    def enabled(self):
+        return bool(self.peers)
+
+    def start(self):
+        if not self.peers:
+            return
+
+        def loop():
+            while True:
+                self.poll_once()
+                time.sleep(self.interval)
+        threading.Thread(target=loop, daemon=True).start()
+
+    def poll_once(self):
+        threads = [threading.Thread(target=self._poll, args=(p,), daemon=True) for p in self.peers]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+    def _poll(self, p):
+        import base64
+        u = urllib.parse.urlparse(p["url"])
+        headers = {"Accept": "application/json", "User-Agent": "gpu-lens-fleet/" + VERSION}
+        if u.username:
+            headers["Authorization"] = "Basic " + base64.b64encode(f"{urllib.parse.unquote(u.username)}:{urllib.parse.unquote(u.password or '')}".encode()).decode()
+        host = u.hostname + (f":{u.port}" if u.port else "")
+        url = u._replace(netloc=host, path=u.path.rstrip("/") + "/api/v1/live/summary").geturl()
+        begin = time.time()
+        err, summary = "", None
+        try:
+            status, _, raw = self.http.request("GET", url, "", headers)
+            summary = json.loads(raw.decode("utf-8"))
+            if not isinstance(summary, dict) or summary.get("schema") != "gpulens.summary/v1":
+                err, summary = "the response is not a GPU Lens summary", None
+        except HTTPStatus as e:
+            err = {401: "HTTP 401: the peer requires credentials (put user:password in the peer URL)",
+                   404: "HTTP 404: the peer is not GPU Lens 0.3+ or its live console is disabled"}.get(e.status, f"HTTP {e.status}")
+        except ValueError:
+            err = "the response is not a GPU Lens summary"
+        except Exception as e:
+            err = "timed out" if "timed out" in str(e).lower() else "unreachable: " + sanitize_error(e)
+        with self.lock:
+            m = self.state[p["name"]]
+            m["latency_ms"] = round((time.time() - begin) * 1000.0, 3)
+            if err:
+                m["reachable"], m["error"] = False, err
+            else:
+                m.update(reachable=True, error="", last_ok_at=iso(utcnow()), summary=summary)
+
+    def view(self):
+        now = iso(utcnow())
+        members = []
+        if self.engine is not None:
+            s = self.engine.summary()
+            members.append({"name": s["cluster"], "kind": "local", "url": "(this instance)", "reachable": True, "error": "", "last_ok_at": now,
+                            "latency_ms": 0.0, "summary": s})
+        with self.lock:
+            members += [copy.deepcopy(self.state[n]) for n in sorted(self.state)]
+        t = {"members": 0, "reachable": 0, "gpus_total": 0, "gpus_fresh": 0, "critical": 0, "warning": 0, "info": 0, "unhealthy": 0, "sources_connected": 0}
+        for m in members:
+            t["members"] += 1
+            s = m["summary"]
+            if not m["reachable"] or not s:
+                t["unhealthy"] += 1
+                continue
+            inc = s.get("incidents") or {}
+            t["reachable"] += 1
+            t["gpus_total"] += s.get("gpus_total", 0)
+            t["gpus_fresh"] += s.get("gpus_fresh", 0)
+            for k in ("critical", "warning", "info"):
+                t[k] += inc.get(k, 0)
+            t["sources_connected"] += s.get("sources_connected", 0)
+            if inc.get("critical", 0) > 0 or s.get("verdict") == "blocked":
+                t["unhealthy"] += 1
+        note = (f"Each peer is a separate GPU Lens instance that runs its own collection, rules and alerts. The hub reads their summaries every {self.interval:g}s (read-only GET)."
+                if self.peers else "Add other GPU Lens instances with --peer name=https://host:8080 (repeatable) or GPULENS_PEERS to see every cluster here.")
+        return {"enabled": bool(self.peers), "interval_seconds": self.interval, "members": members, "totals": t, "generated_at": now, "note": note}
+
+
+# ---------------------------------------------------------------------------------------------
+# /metrics (mirrors internal/api/metrics.go): GPU Lens's own health, never GPU telemetry
+# ---------------------------------------------------------------------------------------------
+def render_metrics(engine, http_counts, auth_enabled, started_at):
+    import platform
+    out = []
+
+    def fam(name, typ, help_):
+        out.append(f"# HELP {name} {help_}")
+        out.append(f"# TYPE {name} {typ}")
+
+    def smp(name, labels, v):
+        lab = ""
+        if labels:
+            lab = "{" + ",".join(f'{k}="' + str(labels[k]).replace("\\", "\\\\").replace('"', '\\"') + '"' for k in sorted(labels)) + "}"
+        out.append(f"{name}{lab} {int(v) if float(v).is_integer() else v}")
+
+    b = lambda x: 1 if x else 0
+    fam("gpulens_build_info", "gauge", "GPU Lens build information.")
+    smp("gpulens_build_info", {"version": VERSION, "runtime": RUNTIME, "pyversion": platform.python_version()}, 1)
+    fam("gpulens_process_start_time_seconds", "gauge", "Start time of the GPU Lens process since the Unix epoch.")
+    smp("gpulens_process_start_time_seconds", None, int(started_at))
+    fam("gpulens_auth_enabled", "gauge", "1 when HTTP basic authentication is required.")
+    smp("gpulens_auth_enabled", None, b(auth_enabled))
+    fam("gpulens_http_requests_total", "counter", "HTTP requests served, by status code.")
+    for code in sorted(http_counts):
+        smp("gpulens_http_requests_total", {"code": str(code)}, http_counts[code])
+    if engine is not None:
+        m = engine.metrics_snapshot()
+        fam("gpulens_live_enabled", "gauge", "1 when the live console is available.")
+        smp("gpulens_live_enabled", None, b(m["enabled"]))
+        fam("gpulens_live_running", "gauge", "1 while a live collection session is running.")
+        smp("gpulens_live_running", None, b(m["running"]))
+        fam("gpulens_live_cycles", "gauge", "Collection cycles completed in the current session.")
+        smp("gpulens_live_cycles", None, m["tick"])
+        fam("gpulens_live_cycle_duration_seconds", "gauge", "Duration of the last collection cycle.")
+        smp("gpulens_live_cycle_duration_seconds", None, round(m["last_tick_dur"], 6))
+        fam("gpulens_live_last_cycle_timestamp_seconds", "gauge", "Time of the last completed collection cycle (0 if none).")
+        smp("gpulens_live_last_cycle_timestamp_seconds", None, int(m["last_tick_at"].timestamp()) if m["last_tick_at"] else 0)
+        fam("gpulens_live_interval_seconds", "gauge", "Configured live refresh interval.")
+        smp("gpulens_live_interval_seconds", None, float(m["interval"]))
+        fam("gpulens_live_source_enabled", "gauge", "1 when a telemetry source is enabled.")
+        for src in m["sources"]:
+            smp("gpulens_live_source_enabled", {"source": src["id"]}, b(src["enabled"]))
+        fam("gpulens_live_source_up", "gauge", "1 when a telemetry source answered on its last check (connected or degraded).")
+        for src in m["sources"]:
+            smp("gpulens_live_source_up", {"source": src["id"], "state": src["state"]}, b(src["up"]))
+        fam("gpulens_live_source_latency_seconds", "gauge", "Latency of the last check of each source.")
+        for src in m["sources"]:
+            smp("gpulens_live_source_latency_seconds", {"source": src["id"]}, round(src["latency_ms"] / 1000.0, 6))
+        fam("gpulens_live_gpus", "gauge", "GPUs visible to the live console, by freshness.")
+        smp("gpulens_live_gpus", {"freshness": "fresh"}, m["gpus_fresh"])
+        smp("gpulens_live_gpus", {"freshness": "stale"}, m["gpus_stale"])
+        fam("gpulens_live_incidents_open", "gauge", "Open live incidents, by severity.")
+        for sev in ("critical", "warning", "info"):
+            smp("gpulens_live_incidents_open", {"severity": sev}, m["open"].get(sev, 0))
+        fam("gpulens_live_incidents_resolved", "gauge", "Incidents in the resolved log.")
+        smp("gpulens_live_incidents_resolved", None, m["resolved"])
+        fam("gpulens_live_threshold_overrides", "gauge", "Live rule thresholds that differ from the configured defaults.")
+        smp("gpulens_live_threshold_overrides", None, m["overrides"])
+        fam("gpulens_readonly_guard_ok", "gauge", "1 when the read-only transport self-test passed (mutating HTTP verbs are blocked).")
+        smp("gpulens_readonly_guard_ok", None, b(m["guard_ok"]))
+        fam("gpulens_alerts_sent_total", "counter", "Alerts delivered, by destination.")
+        fam("gpulens_alerts_failed_total", "counter", "Alert deliveries that failed after retries, by destination.")
+        fam("gpulens_alerts_dropped_total", "counter", "Alerts dropped because the delivery queue was full, by destination.")
+        for d, (sent, failed, dropped) in sorted(m["alert_counters"].items()):
+            smp("gpulens_alerts_sent_total", {"destination": d}, sent)
+            smp("gpulens_alerts_failed_total", {"destination": d}, failed)
+            smp("gpulens_alerts_dropped_total", {"destination": d}, dropped)
+        if m["persistence"]:
+            fam("gpulens_live_state_saved_timestamp_seconds", "gauge", "Time the live state file was last written (0 if never).")
+            smp("gpulens_live_state_saved_timestamp_seconds", None, int(m["state_saved_at"].timestamp()) if m["state_saved_at"] else 0)
+            fam("gpulens_live_state_save_ok", "gauge", "1 when the last live state save succeeded.")
+            smp("gpulens_live_state_save_ok", None, b(not m["state_err"]))
+    return "\n".join(out) + "\n"
 
 
 def build_config(args, env=None):
@@ -3014,6 +4147,10 @@ def build_config(args, env=None):
         c["nvidia_smi_path"] = args.nvidia_smi_path
     if args.no_nvidia_smi:
         c["nvidia_smi_enabled"] = False
+    if args.amd_smi_path:
+        c["amd_smi_path"] = args.amd_smi_path
+    if args.no_amd_smi:
+        c["amd_smi_enabled"] = False
     if args.no_host_vitals:
         c["host_vitals_enabled"] = False
     if args.live_allow_remote_config:
