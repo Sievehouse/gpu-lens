@@ -14,7 +14,7 @@ jobs:
     name: Go, Python runtime, frontend and live API tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-go@v5
         with:
@@ -72,7 +72,7 @@ jobs:
     name: Dependency vulnerability scan
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Released binaries and images are built with the latest stable Go, so scan with the same standard library.
       - uses: actions/setup-go@v5
@@ -96,7 +96,7 @@ jobs:
     name: Helm chart lint and render
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: azure/setup-helm@v4
 
