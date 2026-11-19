@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/Sievehouse/gpu-lens/security/advisories/new
+    about: Please report security issues privately, not as public issues.
+  - name: Read the Go Live guide
+    url: https://github.com/Sievehouse/gpu-lens/blob/main/docs/LIVE.md
+    about: Flags, environment variables, connecting real sources and honest limits.
