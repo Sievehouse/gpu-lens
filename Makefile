@@ -1,6 +1,8 @@
-.PHONY: all demo live live-lab build test test-live verify-local fixtures frontend lint docker-up clean
+.PHONY: all demo live live-lab build test test-live verify-local fixtures frontend lint docker-up clean vuln helm-lint release-snapshot docker-multiarch
 
 GO_BIN := $(shell command -v go 2>/dev/null)
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+LDFLAGS := -s -w -X github.com/Sievehouse/gpu-lens/internal/live.Version=$(VERSION)
 
 all: fixtures frontend test
 
@@ -17,7 +19,7 @@ build: frontend
 ifdef GO_BIN
 	gofmt -s -w cmd/ internal/
 	go vet ./...
-	go build -o bin/gpulens ./cmd/gpulens
+	go build -trimpath -ldflags "$(LDFLAGS)" -o bin/gpulens ./cmd/gpulens
 else
 	@echo "[Info] 'go' binary not found in PATH; using verified local runtime engine (scripts/local_runtime_server.py)."
 endif
@@ -65,3 +67,20 @@ docker-up:
 
 clean:
 	rm -rf bin/ gpulens.db gpulens-state.json
+
+## Scan Go code and the standard library for known vulnerabilities (needs network access to vuln.go.dev)
+vuln:
+	go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+	cd web && npm audit --audit-level=high
+
+## Lint the Helm chart (needs helm)
+helm-lint:
+	helm lint deploy/helm/gpulens
+
+## Build release archives locally without publishing (needs goreleaser)
+release-snapshot:
+	goreleaser release --snapshot --clean
+
+## Build the container image for linux/amd64 and linux/arm64 (needs docker buildx)
+docker-multiarch:
+	docker buildx build --platform linux/amd64,linux/arm64 --build-arg VERSION=$(VERSION) -t gpu-lens:$(VERSION) .
