@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 The GPU Lens Authors
+
 package source
 
 import (
@@ -11,8 +14,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gpulens/gpu-lens/internal/config"
-	"github.com/gpulens/gpu-lens/internal/domain"
+	"github.com/Sievehouse/gpu-lens/internal/config"
+	"github.com/Sievehouse/gpu-lens/internal/domain"
 )
 
 // LabEmulatorMarkerMetric is exported only by the GPU Lens Live Lab emulator (scripts/live_lab.py). Any source
