@@ -1,4 +1,4 @@
-name: GPU Lens CI
+name: CI
 
 on:
   push:
@@ -6,50 +6,105 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
-  backend-and-verification:
-    name: Go Backend, Rules Engine & Offline Verification
+  test:
+    name: Go, Python runtime, frontend and live API tests
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Go 1.22
-        uses: actions/setup-go@v5
+      - uses: actions/setup-go@v5
         with:
-          go-version: "1.22"
+          go-version-file: go.mod
 
-      - name: Set up Node.js 20
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: "20"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
 
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: Check Go formatting (gofmt)
-        run: |
-          test -z "$(gofmt -l cmd/ internal/)"
+      # The test doubles must be executable. Commits made on Windows can drop the bit, so make sure.
+      - name: Make the nvidia-smi / amd-smi test doubles executable
+        run: chmod +x tests/fixtures/fake-nvidia-smi tests/fixtures/fake-amd-smi
 
-      - name: Run go vet
+      - name: gofmt
+        run: test -z "$(gofmt -l cmd/ internal/)"
+
+      - name: go vet
         run: go vet ./...
 
       - name: Generate deterministic fixtures
         run: python3 scripts/generate_fixtures.py
 
-      - name: Run Go unit and integration tests
-        run: go test -v -race ./...
+      - name: Go unit and integration tests (race detector)
+        run: go test -race ./...
 
-      - name: Build Go binary
-        run: go build -v -o bin/gpulens ./cmd/gpulens
+      - name: Build the Go binary with the version stamped in
+        run: go build -ldflags "-X github.com/Sievehouse/gpu-lens/internal/live.Version=ci-${GITHUB_SHA::7}" -o bin/gpulens ./cmd/gpulens
+
+      - name: Install frontend dependencies (lockfile)
+        working-directory: web
+        run: npm ci
 
       - name: Build the frontend bundle
         run: node web/scripts/build_offline.js
 
-      - name: Run end-to-end verification suite
+      - name: Warn when the committed web/dist is out of date
+        run: |
+          if ! git diff --quiet -- web/dist; then
+            echo "::warning::web/dist differs from a fresh build. Run 'node web/scripts/build_offline.js' and commit web/dist (Render serves the committed bundle)."
+          fi
+
+      - name: Offline verification suite
         run: python3 scripts/run_verification_suite.py
 
-      - name: Live API black-box tests (Go and Python runtimes, Live Lab emulator, nvidia-smi test double)
+      - name: Live API black-box tests (Go and Python runtimes)
         run: python3 tests/live_blackbox.py both
+
+  vulnerabilities:
+    name: Dependency vulnerability scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Released binaries and images are built with the latest stable Go, so scan with the same standard library.
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+
+      - name: govulncheck (Go code and standard library)
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: npm audit (frontend toolchain)
+        working-directory: web
+        run: npm audit --audit-level=high
+
+  helm:
+    name: Helm chart lint and render
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-helm@v4
+
+      - name: helm lint (defaults and a full configuration)
+        run: |
+          helm lint deploy/helm/gpulens
+          helm lint deploy/helm/gpulens --set auth.enabled=true,auth.adminPassword=change-me-123,alerts.slackWebhookUrl=https://hooks.slack.com/services/x \
+            --set persistence.enabled=true,ingress.enabled=true,serviceMonitor.enabled=true --set fleet.peers[0].name=other,fleet.peers[0].url=https://gpulens.other:8080
+
+      - name: helm template renders valid YAML
+        run: helm template gpulens deploy/helm/gpulens --set persistence.enabled=true > /tmp/rendered.yaml && test -s /tmp/rendered.yaml
