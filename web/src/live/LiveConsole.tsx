@@ -9,9 +9,11 @@ import { GPUFilters, renderCommandCenter, renderGPUs, renderHost, renderPrefligh
 import {
   ConnDraft, buildConfigPatch, draftFromConfig, renderActivity, renderConnections, renderSources, renderThresholds, renderWorkloads,
 } from './views_b';
+import { renderAlerting, renderFleet, renderPersistence, viewerBanner } from './views_c';
 
 const TABS: [string, string][] = [
   ['command', 'Command Center'],
+  ['fleet', 'Fleet'],
   ['preflight', 'Check Everything'],
   ['gpus', 'GPUs'],
   ['incidents', 'Incidents'],
@@ -64,6 +66,7 @@ export function LiveConsole(props: { onExit: () => void }) {
   }, []);
 
   const s = live.state;
+  live.fleetFocus = tab === 'fleet';
 
   // Seed the connection form once the first state arrives (and again whenever the server config changes underneath us).
   const cfgKey = s ? JSON.stringify(s.config) : '';
@@ -101,6 +104,9 @@ export function LiveConsole(props: { onExit: () => void }) {
   }
 
   const ov = s.overview;
+  const canOperate = s.status.can_operate !== false;
+  const fleetOn = !!(live.fleet && live.fleet.enabled);
+  const tabs = TABS.filter(([k]) => k !== 'fleet' || fleetOn || tab === 'fleet');
   const incidents: Incident[] = (ov && ov.active_incidents) || [];
   const running = s.status.state === 'running';
   const stale = running && live.lastFetchAt > 0 && Date.now() - live.lastFetchAt > Math.max(8000, s.status.interval_seconds * 4000);
@@ -141,6 +147,7 @@ export function LiveConsole(props: { onExit: () => void }) {
   let body: any = null;
   switch (tab) {
     case 'command': body = renderCommandCenter(live, s, setTab, props.onExit); break;
+    case 'fleet': body = renderFleet(live); break;
     case 'preflight': body = renderPreflight(live, s, () => store.recheck()); break;
     case 'gpus': body = renderGPUs(live, s, gpuFilters, setGpuFilters, openGpu, setOpenGpu); break;
     case 'incidents':
@@ -170,10 +177,16 @@ export function LiveConsole(props: { onExit: () => void }) {
     case 'host': body = renderHost(live, s); break;
     case 'connections':
       body = conn
-        ? renderConnections(s, conn, setConn, saveConn, () => setConn(draftFromConfig(s.config)), live.busy)
+        ? (
+          <div>
+            {renderConnections(s, conn, setConn, saveConn, () => setConn(draftFromConfig(s.config)), live.busy)}
+            {renderAlerting(s, canOperate, live.busy, () => store.testAlerts())}
+            {renderPersistence(s)}
+          </div>
+        )
         : <div className="panel">Loading…</div>;
       break;
-    case 'thresholds': body = renderThresholds(s, thDraft, setThDraft, applyThresholds, resetThresholds, live.busy); break;
+    case 'thresholds': body = renderThresholds(s, thDraft, setThDraft, applyThresholds, resetThresholds, live.busy, canOperate); break;
     case 'activity': body = renderActivity(live, s, actFilter, setActFilter); break;
     case 'rules': body = renderRulesTab(s.rules || []); break;
     default: body = null;
@@ -185,6 +198,7 @@ export function LiveConsole(props: { onExit: () => void }) {
     if (k === 'incidents') return incidents.length;
     if (k === 'gpus') return s.gpus.length;
     if (k === 'activity') return live.activity.length;
+    if (k === 'fleet') return live.fleet ? live.fleet.totals.members : null;
     return null;
   };
 
@@ -197,14 +211,18 @@ export function LiveConsole(props: { onExit: () => void }) {
           {s.status.last_tick_duration_ms ? ` · last cycle ${num(s.status.last_tick_duration_ms, 0)} ms` : ''}
         </span>
         <div style={{ flex: '1' }} />
+        {s.status.auth_enabled && (
+          <span className="lv-note" title="Signed in with HTTP basic authentication">signed in as <b className="mono">{s.status.user}</b> ({s.status.role})</span>
+        )}
         {running
-          ? <button className="btn" disabled={live.busy !== ''} onClick={() => store.stop()}>Pause collection</button>
+          ? <button className="btn" disabled={live.busy !== '' || !canOperate} title={canOperate ? '' : 'Viewer role: read-only'} onClick={() => store.stop()}>Pause collection</button>
           : <button className="btn btn-primary" disabled={live.busy !== ''} onClick={() => store.start()}>Resume collection</button>}
-        <button className="btn" disabled={live.busy !== ''} onClick={() => store.recheck()}>{live.busy === 'recheck' ? 'Checking…' : 'Re-check everything'}</button>
+        <button className="btn" disabled={live.busy !== '' || !canOperate} title={canOperate ? '' : 'Viewer role: read-only'} onClick={() => store.recheck()}>{live.busy === 'recheck' ? 'Checking…' : 'Re-check everything'}</button>
         <button className="btn" onClick={() => download(`gpu-lens-live-${new Date().toISOString().replace(/[:.]/g, '-')}.json`, store.exportSnapshot())}>Export JSON</button>
         <button className="btn" onClick={props.onExit}>Open the simulation →</button>
       </div>
 
+      {viewerBanner(s)}
       {s.status.emulated && (
         <div className="lv-emulated">
           <b>EMULATED DATA</b> — the connected DCGM/Kubernetes endpoints are the GPU Lens <span className="mono">Live Lab</span> synthetic emulator, not real
@@ -241,7 +259,7 @@ export function LiveConsole(props: { onExit: () => void }) {
           </div>
         </div>
         <nav className="nav-tabs lv-tabs">
-          {TABS.map(([k, label]) => (
+          {tabs.map(([k, label]) => (
             <button className={`nav-tab ${tab === k ? 'active' : ''}`} onClick={() => setTab(k)}>
               {label}
               {tabCount(k) !== null && <span className="tab-count">{tabCount(k)}</span>}
@@ -267,7 +285,8 @@ export function LiveConsole(props: { onExit: () => void }) {
         </div>
         {body}
         <div className="lv-footer lv-note">
-          Read-only by construction: every request GPU Lens makes is a GET/HEAD or an allow-listed nvidia-smi query. {ov && <Badge kind="info">{ov.data_mode}</Badge>}
+          Read-only by construction: every request GPU Lens makes to your infrastructure is a GET/HEAD or an allow-listed nvidia-smi / amd-smi query.
+          {s.alerts && s.alerts.enabled ? ' Alerts are POSTed only to the destinations configured at startup.' : ''} {ov && <Badge kind="info">{ov.data_mode}</Badge>}
         </div>
       </main>
     </div>
