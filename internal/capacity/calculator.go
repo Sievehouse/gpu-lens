@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 The GPU Lens Authors
+
 package capacity
 
 import (
@@ -6,8 +9,8 @@ import (
 	"sort"
 	"time"
 
-	"github.com/gpulens/gpu-lens/internal/config"
-	"github.com/gpulens/gpu-lens/internal/domain"
+	"github.com/Sievehouse/gpu-lens/internal/config"
+	"github.com/Sievehouse/gpu-lens/internal/domain"
 )
 
 // BuildReport computes a transparent, reproducible GPU capacity and utilization report from a ClusterSnapshot.
