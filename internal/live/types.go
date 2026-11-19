@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 The GPU Lens Authors
+
 // Package live implements the live telemetry console ("Go Live"): it collects from the real sources available to
 // this GPU Lens instance, merges them into one cluster snapshot, runs the same deterministic rules as the fixture
 // demo, and keeps a rolling session history. Every external call is read-only.
@@ -6,18 +9,21 @@ package live
 import (
 	"time"
 
-	"github.com/gpulens/gpu-lens/internal/config"
-	"github.com/gpulens/gpu-lens/internal/domain"
-	"github.com/gpulens/gpu-lens/internal/source"
+	"github.com/Sievehouse/gpu-lens/internal/alert"
+	"github.com/Sievehouse/gpu-lens/internal/config"
+	"github.com/Sievehouse/gpu-lens/internal/domain"
+	"github.com/Sievehouse/gpu-lens/internal/source"
 )
 
-// Version is the GPU Lens release reported by the live API.
-const Version = "0.2.0"
+// Version is the GPU Lens release reported by the live API, /metrics and -version. Release builds set it from the
+// git tag: go build -ldflags "-X github.com/Sievehouse/gpu-lens/internal/live.Version=v0.3.0".
+var Version = "0.3.0-dev"
 
 // Source identifiers used across the live API.
 const (
 	SourceHost       = "host"
 	SourceNvidiaSMI  = "nvidia_smi"
+	SourceAMDSMI     = "amd_smi"
 	SourceDCGM       = "dcgm_exporter"
 	SourcePrometheus = "prometheus"
 	SourceKubernetes = "kubernetes"
@@ -63,6 +69,10 @@ type Status struct {
 	AutoStart           bool       `json:"auto_start"`
 	Hostname            string     `json:"hostname"`
 	Emulated            bool       `json:"emulated"`
+	Role                string     `json:"role"`
+	AuthEnabled         bool       `json:"auth_enabled"`
+	User                string     `json:"user"`
+	CanOperate          bool       `json:"can_operate"`
 }
 
 // Fact is a labelled detail shown on a source card.
@@ -153,6 +163,9 @@ type GPUView struct {
 	FirstSeenAt        time.Time             `json:"first_seen_at"`
 	IncidentIDs        []string              `json:"incident_ids"`
 	WorstSeverity      string                `json:"worst_severity"`
+	// ExportedMetrics lists the canonical metrics at least one of this GPU's sources publishes, so the console can
+	// show "not exported" instead of a misleading zero.
+	ExportedMetrics []string `json:"exported_metrics"`
 }
 
 // ProcessView is one GPU compute process row.
@@ -243,4 +256,6 @@ type State struct {
 	Rules              []domain.RuleDefinition  `json:"rules"`
 	SourcesDetail      *SourcesDetail           `json:"sources_detail"`
 	Notes              []string                 `json:"notes"`
+	Alerts             alert.Status             `json:"alerts"`
+	Persistence        PersistenceStatus        `json:"persistence"`
 }
