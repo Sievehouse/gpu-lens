@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 The GPU Lens Authors
+
 package api
 
 import (
@@ -8,11 +11,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gpulens/gpu-lens/internal/config"
-	"github.com/gpulens/gpu-lens/internal/live"
-	"github.com/gpulens/gpu-lens/internal/rules"
-	"github.com/gpulens/gpu-lens/internal/source"
-	"github.com/gpulens/gpu-lens/internal/store"
+	"github.com/Sievehouse/gpu-lens/internal/config"
+	"github.com/Sievehouse/gpu-lens/internal/live"
+	"github.com/Sievehouse/gpu-lens/internal/rules"
+	"github.com/Sievehouse/gpu-lens/internal/source"
+	"github.com/Sievehouse/gpu-lens/internal/store"
 )
 
 func newLiveTestServer(t *testing.T, mutate func(*config.Config)) *Server {
