@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 The GPU Lens Authors
+
 package api
 
 import (
@@ -6,17 +9,20 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/gpulens/gpu-lens/internal/capacity"
-	"github.com/gpulens/gpu-lens/internal/config"
-	"github.com/gpulens/gpu-lens/internal/domain"
-	"github.com/gpulens/gpu-lens/internal/live"
-	"github.com/gpulens/gpu-lens/internal/rules"
-	"github.com/gpulens/gpu-lens/internal/source"
-	"github.com/gpulens/gpu-lens/internal/store"
+	"github.com/Sievehouse/gpu-lens/internal/audit"
+	"github.com/Sievehouse/gpu-lens/internal/capacity"
+	"github.com/Sievehouse/gpu-lens/internal/config"
+	"github.com/Sievehouse/gpu-lens/internal/domain"
+	"github.com/Sievehouse/gpu-lens/internal/fleet"
+	"github.com/Sievehouse/gpu-lens/internal/live"
+	"github.com/Sievehouse/gpu-lens/internal/rules"
+	"github.com/Sievehouse/gpu-lens/internal/source"
+	"github.com/Sievehouse/gpu-lens/internal/store"
 )
 
 // Server wires HTTP routes to the normalized collector, deterministic rule engine, capacity calculator, and store.
@@ -30,6 +36,12 @@ type Server struct {
 	mux           *http.ServeMux
 	// live is the optional live telemetry engine behind /api/v1/live/* (see live_handlers.go).
 	live *live.Engine
+
+	fleet     *fleet.Hub
+	auth      AuthConfig
+	audit     *audit.Log
+	startedAt time.Time
+	httpStats httpCounters
 }
 
 // NewServer constructs a configured HTTP API and static UI server.
@@ -44,15 +56,37 @@ func NewServer(cfg config.Config, fixtureSource *source.FixtureSource, engine *r
 		incidentStore: incidentStore,
 		logger:        logger,
 		mux:           http.NewServeMux(),
+		startedAt:     time.Now(),
 	}
 	s.registerRoutes()
 	return s
 }
 
+// SetAuth turns on basic authentication with admin and (optional) viewer accounts. Call before serving.
+func (s *Server) SetAuth(a AuthConfig) { s.auth = a }
+
+// SetAudit attaches the audit log. Without one, audited actions are not recorded.
+func (s *Server) SetAudit(l *audit.Log) { s.audit = l }
+
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+	defer func() { s.httpStats.add(rec.status) }()
+	w = rec
+	// Security headers for every response: no framing (clickjacking), no MIME sniffing, no referrer leakage.
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("X-Frame-Options", "DENY")
+	w.Header().Set("Referrer-Policy", "no-referrer")
+	var ok bool
+	if r, ok = s.authenticate(w, r); !ok {
+		return
+	}
+	s.serve(w, r)
+}
+
+func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	// The live API exposes real host and cluster data and accepts state-changing requests, so it is
 	// same-origin only: no CORS headers are sent and cross-origin preflights are refused.
-	if isLivePath(r.URL.Path) {
+	if isLivePath(r.URL.Path) || r.URL.Path == "/api/v1/audit" || r.URL.Path == "/api/v1/fleet" || r.URL.Path == "/metrics" {
 		if r.Method == http.MethodOptions {
 			writeError(w, http.StatusForbidden, "live API refused: cross-origin requests are not allowed")
 			return
@@ -81,6 +115,8 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/v1/rules", s.handleRules)
 	s.mux.HandleFunc("/api/v1/scenarios", s.handleScenarios)
 	s.mux.HandleFunc("/api/v1/scenarios/select", s.handleSelectScenario)
+	s.mux.HandleFunc("/api/v1/audit", s.handleAudit)
+	s.mux.HandleFunc("/metrics", s.handleMetrics)
 	s.mux.HandleFunc("/", s.handleStaticUI)
 }
 
@@ -89,7 +125,10 @@ func (s *Server) evaluateActive(r *http.Request) (*domain.ClusterSnapshot, []dom
 	defer s.mu.Unlock()
 
 	if qScenario := strings.TrimSpace(r.URL.Query().Get("scenario")); qScenario != "" && s.fixtureSource != nil {
-		_ = s.fixtureSource.SelectScenario(qScenario)
+		before := s.activeScenarioID()
+		if err := s.fixtureSource.SelectScenario(qScenario); err == nil && before != qScenario {
+			s.record(r, "simulation.scenario.select", before+" → "+qScenario, audit.OutcomeOK)
+		}
 	}
 
 	res, err := s.fixtureSource.Collect(r.Context())
@@ -299,12 +338,17 @@ func (s *Server) handleSelectScenario(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid JSON payload")
 		return
 	}
+	target := strings.TrimSpace(body.ScenarioID)
 	s.mu.Lock()
-	err := s.fixtureSource.SelectScenario(strings.TrimSpace(body.ScenarioID))
+	before := s.activeScenarioID()
+	err := s.fixtureSource.SelectScenario(target)
 	s.mu.Unlock()
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
+	}
+	if before != target {
+		s.record(r, "simulation.scenario.select", before+" → "+target, audit.OutcomeOK)
 	}
 	s.handleOverview(w, &http.Request{Method: http.MethodGet, URL: r.URL})
 }
@@ -332,6 +376,33 @@ func (s *Server) handleStaticUI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.ServeFile(w, r, filepath.Join(s.cfg.StaticDir, "index.html"))
+}
+
+// activeScenarioID returns the simulation scenario currently selected. Callers hold s.mu.
+func (s *Server) activeScenarioID() string {
+	if s.fixtureSource == nil {
+		return ""
+	}
+	if snap, err := s.fixtureSource.ActiveScenario(); err == nil && snap != nil {
+		return snap.ScenarioID
+	}
+	return ""
+}
+
+// handleAudit returns the audit log: who changed what, including refused attempts.
+func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	since, _ := strconv.Atoi(r.URL.Query().Get("since"))
+	entries := s.audit.List(since)
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"count":      len(entries),
+		"persistent": s.audit.Path() != "",
+		"entries":    entries,
+	})
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload interface{}) {
