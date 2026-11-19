@@ -145,6 +145,7 @@ export interface ConnDraft {
   cluster_name: string;
   interval: string;
   nvidia: boolean;
+  amd: boolean;
   host: boolean;
   dcgm: SrcDraft;
   prom: SrcDraft;
@@ -163,6 +164,7 @@ export function draftFromConfig(c: LiveState['config']): ConnDraft {
     cluster_name: c.cluster_name || '',
     interval: String(c.interval_seconds),
     nvidia: c.nvidia_smi_enabled,
+    amd: c.amd_smi_enabled !== false,
     host: c.host_vitals_enabled,
     dcgm: src(c.dcgm_exporter), prom: src(c.prometheus), k8s: src(c.kubernetes),
   };
@@ -180,6 +182,7 @@ export function buildConfigPatch(d: ConnDraft, c: LiveState['config']) {
     cluster_name: d.cluster_name.trim(),
     interval_seconds: Number(d.interval),
     nvidia_smi_enabled: d.nvidia,
+    amd_smi_enabled: d.amd,
     host_vitals_enabled: d.host,
     dcgm_exporter: patchFor(d.dcgm, c.dcgm_exporter),
     prometheus: patchFor(d.prom, c.prometheus),
@@ -240,6 +243,7 @@ export function renderConnections(
         <div className="panel-header"><div className="panel-title">This machine &amp; session</div></div>
         <div className="lv-form-grid">
           <label className="lv-check-label"><input type="checkbox" checked={d.nvidia} disabled={locked} onChange={(e: any) => setD({ ...d, nvidia: e.target.checked })} /> Query the local NVIDIA driver (nvidia-smi)</label>
+          <label className="lv-check-label"><input type="checkbox" checked={d.amd} disabled={locked} onChange={(e: any) => setD({ ...d, amd: e.target.checked })} /> Query the local AMD driver (amd-smi, experimental)</label>
           <label className="lv-check-label"><input type="checkbox" checked={d.host} disabled={locked} onChange={(e: any) => setD({ ...d, host: e.target.checked })} /> Read host vitals (CPU, memory, disk, network)</label>
           <label>Cluster / host label<input className="lv-input wide" value={d.cluster_name} disabled={locked} placeholder={`live@${s.status.hostname}`} onInput={(e: any) => setD({ ...d, cluster_name: e.target.value })} /></label>
           <label>Refresh interval (seconds)
@@ -258,7 +262,8 @@ export function renderConnections(
         <div className="panel-header"><div className="panel-title">Startup-only settings</div></div>
         <table className="lv-kv"><tbody>
           {([
-            ['nvidia-smi path', s.config.nvidia_smi_path || '(auto-discovered)'], ['History kept', `${s.config.history_points} samples`],
+            ['nvidia-smi path', s.config.nvidia_smi_path || '(auto-discovered)'], ['amd-smi path', s.config.amd_smi_path || '(auto-discovered)'],
+            ['History kept', `${s.config.history_points} samples`],
             ['Idle auto-stop', s.config.idle_timeout_seconds ? duration(s.config.idle_timeout_seconds) : 'never'],
             ['Prometheus backfill', `${s.config.prometheus_backfill_minutes} min`], ['Running in a cluster', s.config.in_cluster ? 'yes (service account)' : 'no'],
             ['Remote config changes', s.config.allow_remote_config ? 'allowed' : 'local machine only'],
@@ -294,7 +299,7 @@ const TH_LABELS: Record<string, [string, string]> = {
   optional_sample_gpu_hourly_rate_usd: ['Sample GPU hourly rate (cost illustration)', 'USD'],
 };
 
-export function renderThresholds(s: LiveState, draft: Record<string, string>, setDraft: (d: Record<string, string>) => void, apply: () => void, reset: () => void, busy: string) {
+export function renderThresholds(s: LiveState, draft: Record<string, string>, setDraft: (d: Record<string, string>) => void, apply: () => void, reset: () => void, busy: string, canOperate = true) {
   const keys = Object.keys(s.thresholds).sort((a, b) => (TH_LABELS[a]?.[0] || a).localeCompare(TH_LABELS[b]?.[0] || b));
   const changed = keys.filter((k) => draft[k] !== undefined && draft[k] !== '' && Number(draft[k]) !== s.thresholds[k]);
   return (
@@ -321,9 +326,11 @@ export function renderThresholds(s: LiveState, draft: Record<string, string>, se
         </tbody>
       </table>
       <div className="lv-toolbar" style={{ marginTop: '12px' }}>
-        <button className="btn btn-primary" disabled={changed.length === 0 || busy !== ''} onClick={apply}>Apply {changed.length || ''} change{changed.length === 1 ? '' : 's'}</button>
-        <button className="btn" disabled={s.threshold_overrides.length === 0 || busy !== ''} onClick={reset}>Reset all to defaults</button>
-        <span className="lv-note">Invalid combinations (for example warning above critical) are rejected by the server.</span>
+        <button className="btn btn-primary" disabled={changed.length === 0 || busy !== '' || !canOperate} onClick={apply}>Apply {changed.length || ''} change{changed.length === 1 ? '' : 's'}</button>
+        <button className="btn" disabled={s.threshold_overrides.length === 0 || busy !== '' || !canOperate} onClick={reset}>Reset all to defaults</button>
+        <span className="lv-note">{canOperate
+          ? 'Invalid combinations (for example warning above critical) are rejected by the server. Every change is recorded in the audit log.'
+          : 'Viewer role: thresholds are read-only for you.'}</span>
       </div>
     </div>
   );
@@ -339,7 +346,8 @@ export function renderActivity(L: LiveStore, s: LiveState, filter: string, setFi
         <div className="panel-header">
           <div className="panel-title">Activity log</div>
           <select className="scenario-select" value={filter} onChange={(e: any) => setFilter(e.target.value)}>
-            {[['all', 'Everything'], ['critical', 'Critical'], ['warning', 'Warnings'], ['success', 'Recoveries'], ['source', 'Source changes'], ['incident', 'Incidents']].map(([v, l]) => (
+            {[['all', 'Everything'], ['critical', 'Critical'], ['warning', 'Warnings'], ['success', 'Recoveries'], ['source', 'Source changes'], ['incident', 'Incidents'],
+              ['audit', 'Audit (who changed what)'], ['alert', 'Alerts']].map(([v, l]) => (
               <option value={v} selected={filter === v}>{l}</option>
             ))}
           </select>
