@@ -1,0 +1,30 @@
+name: Feature request
+description: Suggest an improvement or a new capability
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you trying to solve?
+      description: Describe the situation, not only the solution. What did you have to do by hand?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like GPU Lens to do?
+    validations:
+      required: true
+  - type: checkboxes
+    id: principles
+    attributes:
+      label: Ground rules
+      description: GPU Lens stays read-only, deterministic, and never treats missing data as healthy.
+      options:
+        - label: This proposal keeps GPU Lens read-only towards the infrastructure it observes.
+          required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Anything else?
+      description: Telemetry samples, screenshots, links to similar tools.
