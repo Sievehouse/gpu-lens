@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 The GPU Lens Authors
+
 package live
 
 import (
@@ -7,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gpulens/gpu-lens/internal/source"
+	"github.com/Sievehouse/gpu-lens/internal/source"
 )
 
 // recordOutcomeLocked updates a source's connection status as soon as its collection attempt finishes, so the
@@ -70,6 +73,23 @@ func (e *Engine) recordOutcomeLocked(out outcome) {
 			succeed()
 			st.smi = out.smi
 			e.describeSMILocked(st, out.smi)
+		}
+
+	case SourceAMDSMI:
+		switch {
+		case out.notFound:
+			st.nextDue = started.Add(maxDuration(period, notFoundRetry))
+			fail(StateNotFound, "amd-smi is not installed on this machine (only needed for AMD GPUs).",
+				"For AMD GPUs, install ROCm (it ships amd-smi). Machines with NVIDIA GPUs do not need it.", out.err)
+			st.status.FailureCount--
+			st.status.ConsecutiveFailures = 0
+			st.status.LastError = ""
+		case out.err != nil:
+			fail(StateError, "amd-smi is installed but the driver query failed.", amdErrorHint(out.err), out.err)
+		default:
+			succeed()
+			st.amd = out.amd
+			e.describeAMDLocked(st, out.amd)
 		}
 
 	case SourceDCGM:
@@ -217,6 +237,43 @@ func (e *Engine) describeSMILocked(st *sourceState, res *source.NvidiaSMIResult)
 	case len(res.Notes) > 0:
 		st.status.State = StateDegraded
 		st.status.Detail = fmt.Sprintf("%d GPU(s) · driver %s — %s", len(res.GPUs), orDash(res.DriverVersion), res.Notes[0])
+	default:
+		st.status.State = StateConnected
+		st.status.Detail = fmt.Sprintf("%d GPU(s) · driver %s · %d compute process(es)", len(res.GPUs), orDash(res.DriverVersion), procs)
+	}
+}
+
+func amdErrorHint(err error) string {
+	msg := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(msg, "not initialized") || strings.Contains(msg, "driver not loaded"):
+		return "The amdgpu kernel driver is not loaded. Check `dmesg | grep -i amdgpu` and the ROCm installation."
+	case strings.Contains(msg, "permission"):
+		return "The user running GPU Lens may not read the GPU. Add it to the `render` and `video` groups."
+	case strings.Contains(msg, "timed out"):
+		return "The driver did not answer in time. Check `dmesg` for GPU resets or hangs."
+	}
+	return "Run `amd-smi metric` in a terminal on this machine to see the full driver error."
+}
+
+func (e *Engine) describeAMDLocked(st *sourceState, res *source.NvidiaSMIResult) {
+	st.status.Endpoint = "local " + res.BinaryPath
+	procs := 0
+	for _, list := range res.Processes {
+		procs += len(list)
+	}
+	st.status.Facts = []Fact{
+		{"Binary", res.BinaryPath},
+		{"Driver version", orDash(res.DriverVersion)},
+		{"GPUs", fmt.Sprintf("%d", len(res.GPUs))},
+		{"Compute processes", fmt.Sprintf("%d", procs)},
+		{"Support", "Experimental: verified against AMD's documented output, not yet on real hardware"},
+	}
+	switch {
+	case res.NoDevices || len(res.GPUs) == 0:
+		st.status.State = StateDegraded
+		st.status.Detail = "The AMD driver tools answered but report no GPU devices."
+		st.status.Hint = "Check that the GPU is visible in `lspci` and that the amdgpu driver is loaded."
 	default:
 		st.status.State = StateConnected
 		st.status.Detail = fmt.Sprintf("%d GPU(s) · driver %s · %d compute process(es)", len(res.GPUs), orDash(res.DriverVersion), procs)
