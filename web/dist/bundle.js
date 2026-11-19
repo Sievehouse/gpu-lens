@@ -1501,8 +1501,9 @@ function mountApp(factory, container) {
   __modules["live/api"] = function(module, exports, require) {
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.saveThresholds = exports.saveLiveConfig = exports.recheckLive = exports.stopLive = exports.startLive = void 0;
+exports.testAlerts = exports.saveThresholds = exports.saveLiveConfig = exports.recheckLive = exports.stopLive = exports.startLive = void 0;
 exports.fetchLiveState = fetchLiveState;
+exports.fetchFleet = fetchFleet;
 async function request(method, path, body) {
     const init = { method, headers: { Accept: 'application/json' }, cache: 'no-store' };
     if (method === 'POST') {
@@ -1536,6 +1537,14 @@ const saveLiveConfig = (patch) => request('POST', '/api/v1/live/config', patch);
 exports.saveLiveConfig = saveLiveConfig;
 const saveThresholds = (overrides, reset) => request('POST', '/api/v1/live/thresholds', reset ? { reset: true } : { overrides: overrides || {} });
 exports.saveThresholds = saveThresholds;
+const testAlerts = () => request('POST', '/api/v1/live/alerts/test');
+exports.testAlerts = testAlerts;
+async function fetchFleet() {
+    const resp = await fetch('/api/v1/fleet', { headers: { Accept: 'application/json' }, cache: 'no-store' });
+    if (!resp.ok)
+        return null;
+    return (await resp.json());
+}
 
   };
   __modules["live/LiveConsole"] = function(module, exports, require) {
@@ -1550,8 +1559,10 @@ const App_1 = require("../App");
 const ui_1 = require("./ui");
 const views_a_1 = require("./views_a");
 const views_b_1 = require("./views_b");
+const views_c_1 = require("./views_c");
 const TABS = [
     ['command', 'Command Center'],
+    ['fleet', 'Fleet'],
     ['preflight', 'Check Everything'],
     ['gpus', 'GPUs'],
     ['incidents', 'Incidents'],
@@ -1601,6 +1612,7 @@ function LiveConsole(props) {
         return () => store.leave();
     }, []);
     const s = store_1.live.state;
+    store_1.live.fleetFocus = tab === 'fleet';
     // Seed the connection form once the first state arrives (and again whenever the server config changes underneath us).
     const cfgKey = s ? JSON.stringify(s.config) : '';
     (0, jsx_runtime_1.useEffect)(() => {
@@ -1624,6 +1636,9 @@ function LiveConsole(props) {
                 (0, jsx_runtime_1.h)("button", { className: "btn", style: { marginTop: '12px' }, onClick: props.onExit }, "Open the simulation \u2192"))));
     }
     const ov = s.overview;
+    const canOperate = s.status.can_operate !== false;
+    const fleetOn = !!(store_1.live.fleet && store_1.live.fleet.enabled);
+    const tabs = TABS.filter(([k]) => k !== 'fleet' || fleetOn || tab === 'fleet');
     const incidents = (ov && ov.active_incidents) || [];
     const running = s.status.state === 'running';
     const stale = running && store_1.live.lastFetchAt > 0 && Date.now() - store_1.live.lastFetchAt > Math.max(8000, s.status.interval_seconds * 4000);
@@ -1672,6 +1687,9 @@ function LiveConsole(props) {
         case 'command':
             body = (0, views_a_1.renderCommandCenter)(store_1.live, s, setTab, props.onExit);
             break;
+        case 'fleet':
+            body = (0, views_c_1.renderFleet)(store_1.live);
+            break;
         case 'preflight':
             body = (0, views_a_1.renderPreflight)(store_1.live, s, () => store.recheck());
             break;
@@ -1703,11 +1721,14 @@ function LiveConsole(props) {
             break;
         case 'connections':
             body = conn
-                ? (0, views_b_1.renderConnections)(s, conn, setConn, saveConn, () => setConn((0, views_b_1.draftFromConfig)(s.config)), store_1.live.busy)
+                ? ((0, jsx_runtime_1.h)("div", null,
+                    (0, views_b_1.renderConnections)(s, conn, setConn, saveConn, () => setConn((0, views_b_1.draftFromConfig)(s.config)), store_1.live.busy),
+                    (0, views_c_1.renderAlerting)(s, canOperate, store_1.live.busy, () => store.testAlerts()),
+                    (0, views_c_1.renderPersistence)(s)))
                 : (0, jsx_runtime_1.h)("div", { className: "panel" }, "Loading\u2026");
             break;
         case 'thresholds':
-            body = (0, views_b_1.renderThresholds)(s, thDraft, setThDraft, applyThresholds, resetThresholds, store_1.live.busy);
+            body = (0, views_b_1.renderThresholds)(s, thDraft, setThDraft, applyThresholds, resetThresholds, store_1.live.busy, canOperate);
             break;
         case 'activity':
             body = (0, views_b_1.renderActivity)(store_1.live, s, actFilter, setActFilter);
@@ -1726,6 +1747,8 @@ function LiveConsole(props) {
             return s.gpus.length;
         if (k === 'activity')
             return store_1.live.activity.length;
+        if (k === 'fleet')
+            return store_1.live.fleet ? store_1.live.fleet.totals.members : null;
         return null;
     };
     return ((0, jsx_runtime_1.h)("div", { className: "lv-root" },
@@ -1746,12 +1769,19 @@ function LiveConsole(props) {
                 "s",
                 s.status.last_tick_duration_ms ? ` · last cycle ${(0, ui_1.num)(s.status.last_tick_duration_ms, 0)} ms` : ''),
             (0, jsx_runtime_1.h)("div", { style: { flex: '1' } }),
+            s.status.auth_enabled && ((0, jsx_runtime_1.h)("span", { className: "lv-note", title: "Signed in with HTTP basic authentication" },
+                "signed in as ",
+                (0, jsx_runtime_1.h)("b", { className: "mono" }, s.status.user),
+                " (",
+                s.status.role,
+                ")")),
             running
-                ? (0, jsx_runtime_1.h)("button", { className: "btn", disabled: store_1.live.busy !== '', onClick: () => store.stop() }, "Pause collection")
+                ? (0, jsx_runtime_1.h)("button", { className: "btn", disabled: store_1.live.busy !== '' || !canOperate, title: canOperate ? '' : 'Viewer role: read-only', onClick: () => store.stop() }, "Pause collection")
                 : (0, jsx_runtime_1.h)("button", { className: "btn btn-primary", disabled: store_1.live.busy !== '', onClick: () => store.start() }, "Resume collection"),
-            (0, jsx_runtime_1.h)("button", { className: "btn", disabled: store_1.live.busy !== '', onClick: () => store.recheck() }, store_1.live.busy === 'recheck' ? 'Checking…' : 'Re-check everything'),
+            (0, jsx_runtime_1.h)("button", { className: "btn", disabled: store_1.live.busy !== '' || !canOperate, title: canOperate ? '' : 'Viewer role: read-only', onClick: () => store.recheck() }, store_1.live.busy === 'recheck' ? 'Checking…' : 'Re-check everything'),
             (0, jsx_runtime_1.h)("button", { className: "btn", onClick: () => (0, ui_1.download)(`gpu-lens-live-${new Date().toISOString().replace(/[:.]/g, '-')}.json`, store.exportSnapshot()) }, "Export JSON"),
             (0, jsx_runtime_1.h)("button", { className: "btn", onClick: props.onExit }, "Open the simulation \u2192")),
+        (0, views_c_1.viewerBanner)(s),
         s.status.emulated && ((0, jsx_runtime_1.h)("div", { className: "lv-emulated" },
             (0, jsx_runtime_1.h)("b", null, "EMULATED DATA"),
             " \u2014 the connected DCGM/Kubernetes endpoints are the GPU Lens ",
@@ -1783,7 +1813,7 @@ function LiveConsole(props) {
                         "Cluster: ",
                         (0, jsx_runtime_1.h)("span", { className: "mono", style: { color: '#e2e8f0' } }, (ov && ov.cluster_name) || s.status.hostname),
                         " \u00B7 read-only"))),
-            (0, jsx_runtime_1.h)("nav", { className: "nav-tabs lv-tabs" }, TABS.map(([k, label]) => ((0, jsx_runtime_1.h)("button", { className: `nav-tab ${tab === k ? 'active' : ''}`, onClick: () => setTab(k) },
+            (0, jsx_runtime_1.h)("nav", { className: "nav-tabs lv-tabs" }, tabs.map(([k, label]) => ((0, jsx_runtime_1.h)("button", { className: `nav-tab ${tab === k ? 'active' : ''}`, onClick: () => setTab(k) },
                 label,
                 tabCount(k) !== null && (0, jsx_runtime_1.h)("span", { className: "tab-count" }, tabCount(k))))))),
         (0, jsx_runtime_1.h)("main", { className: "main-container" },
@@ -1802,7 +1832,9 @@ function LiveConsole(props) {
                     counts.inconclusive || 0)),
             body,
             (0, jsx_runtime_1.h)("div", { className: "lv-footer lv-note" },
-                "Read-only by construction: every request GPU Lens makes is a GET/HEAD or an allow-listed nvidia-smi query. ",
+                "Read-only by construction: every request GPU Lens makes to your infrastructure is a GET/HEAD or an allow-listed nvidia-smi / amd-smi query.",
+                s.alerts && s.alerts.enabled ? ' Alerts are POSTed only to the destinations configured at startup.' : '',
+                " ",
                 ov && (0, jsx_runtime_1.h)(ui_1.Badge, { kind: "info" }, ov.data_mode)))));
 }
 
@@ -1822,6 +1854,7 @@ exports.saveThresholds = saveThresholds;
 exports.setInterval_ = setInterval_;
 exports.clearMessages = clearMessages;
 exports.exportSnapshot = exportSnapshot;
+exports.testAlerts = testAlerts;
 // Polling store for the live console. Lives outside the component tree so that polling survives re-renders;
 // components read `live` and call `requestRender` through the helpers below.
 const jsx_runtime_1 = require("../jsx-runtime");
@@ -1838,6 +1871,9 @@ exports.live = {
     lastFetchAt: 0,
     fetchCount: 0,
     paused: false,
+    fleet: null,
+    fleetAt: 0,
+    fleetFocus: false,
 };
 const MAX_ACTIVITY = 500;
 let timer;
@@ -1894,6 +1930,15 @@ async function refresh() {
         exports.live.lastFetchAt = Date.now();
         exports.live.fetchCount++;
         consecutiveErrors = 0;
+        if (Date.now() - exports.live.fleetAt > (exports.live.fleetFocus ? 3000 : 15000)) {
+            exports.live.fleetAt = Date.now();
+            try {
+                exports.live.fleet = await api.fetchFleet();
+            }
+            catch {
+                /* the fleet view is optional */
+            }
+        }
     }
     catch (err) {
         consecutiveErrors++;
@@ -2002,6 +2047,29 @@ function exportSnapshot() {
         note: 'GPU Lens live snapshot. Read-only telemetry; secrets are never included.',
         state: s ? { ...s, history: { ...s.history, points: exports.live.history }, activity: exports.live.activity } : null,
     }, null, 2);
+}
+async function testAlerts() {
+    exports.live.busy = 'alerts';
+    exports.live.notice = '';
+    (0, jsx_runtime_1.requestRender)();
+    try {
+        const res = await api.testAlerts();
+        const ok = res.results.filter((r) => r.ok).length;
+        const failed = res.results.filter((r) => !r.ok).map((r) => `${r.kind}: ${r.error}`);
+        if (exports.live.state)
+            exports.live.state = { ...exports.live.state, alerts: res.status };
+        if (failed.length)
+            exports.live.error = `Test alert: ${ok} of ${res.results.length} destination(s) accepted it. ${failed.join('; ')}`;
+        else
+            exports.live.notice = `Test alert delivered to ${ok} destination(s).`;
+    }
+    catch (err) {
+        exports.live.error = err?.message || 'Test alert failed.';
+    }
+    finally {
+        exports.live.busy = '';
+        (0, jsx_runtime_1.requestRender)();
+    }
 }
 
   };
@@ -2541,17 +2609,31 @@ function renderGPUs(L, s, f, setF, openUUID, setOpen) {
                 open && renderGPUDetail(g)));
         }))));
 }
+const NOT_EXPORTED = '— (not exported)';
+// metricCell shows a value only when one of this GPU's sources really publishes the metric. A missing metric is
+// never rendered as 0 (nvidia-smi, for example, has no Xid or PCIe-replay counters) and never as "undefined".
+function metricCell(g, metric, value, fmt = (v) => v) {
+    const exported = g.exported_metrics;
+    const known = Array.isArray(exported) && exported.some((x) => x.indexOf('DCGM_') === 0);
+    if (known && exported.indexOf(metric) < 0)
+        return NOT_EXPORTED;
+    if (value === null || value === undefined)
+        return NOT_EXPORTED;
+    return fmt(value);
+}
 function renderGPUDetail(g) {
     const m = g.latest;
     const rows = [
         ['UUID', g.uuid], ['PCI bus', g.pci_bus_id || '—'], ['Driver', g.driver_version || '—'], ['P-state', g.pstate || '—'],
         ['Memory total', (0, ui_1.mib)(g.total_memory_mib || null)], ['VRAM used / free', `${(0, ui_1.mib)(m.fb_used_mib)} / ${(0, ui_1.mib)(m.fb_free_mib)}`],
-        ['Memory copy util', (0, ui_1.num)(m.mem_copy_util_percent, 0, '%')], ['Memory (HBM) temp', (0, ui_1.num)(m.memory_temp_celsius, 0, '°C')],
-        ['Power limit', g.power_limit_watts ? `${g.power_limit_watts} W` : '—'], ['Fan', g.fan_speed_percent === null ? '—' : `${g.fan_speed_percent}%`],
+        ['Memory copy util', metricCell(g, 'DCGM_FI_DEV_MEM_COPY_UTIL', m.mem_copy_util_percent, (v) => (0, ui_1.num)(v, 0, '%'))],
+        ['Memory (HBM) temp', metricCell(g, 'DCGM_FI_DEV_MEMORY_TEMP', m.memory_temp_celsius, (v) => (0, ui_1.num)(v, 0, '°C'))],
+        ['Power limit', g.power_limit_watts ? `${g.power_limit_watts} W` : '—'], ['Fan', g.fan_speed_percent === null || g.fan_speed_percent === undefined ? '—' : `${g.fan_speed_percent}%`],
         ['PCIe link', g.pcie ? `Gen${g.pcie.gen_current}/${g.pcie.gen_max} · x${g.pcie.width_current}/${g.pcie.width_max}` : '—'],
-        ['XID error', m.xid_error_code === null ? '— (not exported)' : m.xid_error_code], ['PCIe replays', m.pcie_replay_counter === null ? '— (not exported)' : m.pcie_replay_counter],
-        ['ECC double-bit', m.ecc_dbe_vol_total === null ? '— (not exported)' : m.ecc_dbe_vol_total], ['ECC single-bit', m.ecc_sbe_vol_total === null ? '— (not exported)' : m.ecc_sbe_vol_total],
-        ['Row-remap failure', m.row_remap_failure === null ? '— (not exported)' : m.row_remap_failure], ['Thermal violation', m.thermal_violation_ns === null ? '— (not exported)' : `${m.thermal_violation_ns} ns`],
+        ['XID error', metricCell(g, 'DCGM_FI_DEV_XID_ERRORS', m.xid_error_code)], ['PCIe replays', metricCell(g, 'DCGM_FI_DEV_PCIE_REPLAY_COUNTER', m.pcie_replay_counter)],
+        ['ECC double-bit', metricCell(g, 'DCGM_FI_DEV_ECC_DBE_VOL_TOTAL', m.ecc_dbe_vol_total)], ['ECC single-bit', metricCell(g, 'DCGM_FI_DEV_ECC_SBE_VOL_TOTAL', m.ecc_sbe_vol_total)],
+        ['Row-remap failure', metricCell(g, 'DCGM_FI_DEV_ROW_REMAP_FAILURE', m.row_remap_failure)],
+        ['Thermal violation', metricCell(g, 'DCGM_FI_DEV_THERMAL_VIOLATION', m.thermal_violation_ns, (v) => `${v} ns`)],
         ['Reported by', (g.sources || []).join(', ') || '—'], ['Samples this session', g.sample_count], ['Incidents', (g.incident_ids || []).join(', ') || 'none'],
     ];
     return ((0, jsx_runtime_1.h)("div", { className: "lv-detail" },
@@ -2832,6 +2914,7 @@ function draftFromConfig(c) {
         cluster_name: c.cluster_name || '',
         interval: String(c.interval_seconds),
         nvidia: c.nvidia_smi_enabled,
+        amd: c.amd_smi_enabled !== false,
         host: c.host_vitals_enabled,
         dcgm: src(c.dcgm_exporter), prom: src(c.prometheus), k8s: src(c.kubernetes),
     };
@@ -2849,6 +2932,7 @@ function buildConfigPatch(d, c) {
         cluster_name: d.cluster_name.trim(),
         interval_seconds: Number(d.interval),
         nvidia_smi_enabled: d.nvidia,
+        amd_smi_enabled: d.amd,
         host_vitals_enabled: d.host,
         dcgm_exporter: patchFor(d.dcgm, c.dcgm_exporter),
         prometheus: patchFor(d.prom, c.prometheus),
@@ -2893,6 +2977,9 @@ function renderConnections(s, d, setD, save, reload, busy) {
                     (0, jsx_runtime_1.h)("input", { type: "checkbox", checked: d.nvidia, disabled: locked, onChange: (e) => setD({ ...d, nvidia: e.target.checked }) }),
                     " Query the local NVIDIA driver (nvidia-smi)"),
                 (0, jsx_runtime_1.h)("label", { className: "lv-check-label" },
+                    (0, jsx_runtime_1.h)("input", { type: "checkbox", checked: d.amd, disabled: locked, onChange: (e) => setD({ ...d, amd: e.target.checked }) }),
+                    " Query the local AMD driver (amd-smi, experimental)"),
+                (0, jsx_runtime_1.h)("label", { className: "lv-check-label" },
                     (0, jsx_runtime_1.h)("input", { type: "checkbox", checked: d.host, disabled: locked, onChange: (e) => setD({ ...d, host: e.target.checked }) }),
                     " Read host vitals (CPU, memory, disk, network)"),
                 (0, jsx_runtime_1.h)("label", null,
@@ -2912,7 +2999,8 @@ function renderConnections(s, d, setD, save, reload, busy) {
                 (0, jsx_runtime_1.h)("div", { className: "panel-title" }, "Startup-only settings")),
             (0, jsx_runtime_1.h)("table", { className: "lv-kv" },
                 (0, jsx_runtime_1.h)("tbody", null, [
-                    ['nvidia-smi path', s.config.nvidia_smi_path || '(auto-discovered)'], ['History kept', `${s.config.history_points} samples`],
+                    ['nvidia-smi path', s.config.nvidia_smi_path || '(auto-discovered)'], ['amd-smi path', s.config.amd_smi_path || '(auto-discovered)'],
+                    ['History kept', `${s.config.history_points} samples`],
                     ['Idle auto-stop', s.config.idle_timeout_seconds ? (0, ui_1.duration)(s.config.idle_timeout_seconds) : 'never'],
                     ['Prometheus backfill', `${s.config.prometheus_backfill_minutes} min`], ['Running in a cluster', s.config.in_cluster ? 'yes (service account)' : 'no'],
                     ['Remote config changes', s.config.allow_remote_config ? 'allowed' : 'local machine only'],
@@ -2944,7 +3032,7 @@ const TH_LABELS = {
     correlation_lead_minutes: ['Failure correlation lead', 'min'],
     optional_sample_gpu_hourly_rate_usd: ['Sample GPU hourly rate (cost illustration)', 'USD'],
 };
-function renderThresholds(s, draft, setDraft, apply, reset, busy) {
+function renderThresholds(s, draft, setDraft, apply, reset, busy, canOperate = true) {
     const keys = Object.keys(s.thresholds).sort((a, b) => (TH_LABELS[a]?.[0] || a).localeCompare(TH_LABELS[b]?.[0] || b));
     const changed = keys.filter((k) => draft[k] !== undefined && draft[k] !== '' && Number(draft[k]) !== s.thresholds[k]);
     return ((0, jsx_runtime_1.h)("div", { className: "panel" },
@@ -2975,13 +3063,15 @@ function renderThresholds(s, draft, setDraft, apply, reset, busy) {
                         (0, jsx_runtime_1.h)("span", { className: "lv-note" }, TH_LABELS[k]?.[1] || ''))));
             }))),
         (0, jsx_runtime_1.h)("div", { className: "lv-toolbar", style: { marginTop: '12px' } },
-            (0, jsx_runtime_1.h)("button", { className: "btn btn-primary", disabled: changed.length === 0 || busy !== '', onClick: apply },
+            (0, jsx_runtime_1.h)("button", { className: "btn btn-primary", disabled: changed.length === 0 || busy !== '' || !canOperate, onClick: apply },
                 "Apply ",
                 changed.length || '',
                 " change",
                 changed.length === 1 ? '' : 's'),
-            (0, jsx_runtime_1.h)("button", { className: "btn", disabled: s.threshold_overrides.length === 0 || busy !== '', onClick: reset }, "Reset all to defaults"),
-            (0, jsx_runtime_1.h)("span", { className: "lv-note" }, "Invalid combinations (for example warning above critical) are rejected by the server."))));
+            (0, jsx_runtime_1.h)("button", { className: "btn", disabled: s.threshold_overrides.length === 0 || busy !== '' || !canOperate, onClick: reset }, "Reset all to defaults"),
+            (0, jsx_runtime_1.h)("span", { className: "lv-note" }, canOperate
+                ? 'Invalid combinations (for example warning above critical) are rejected by the server. Every change is recorded in the audit log.'
+                : 'Viewer role: thresholds are read-only for you.'))));
 }
 // ---------- Activity ----------
 function renderActivity(L, s, filter, setFilter) {
@@ -2991,7 +3081,8 @@ function renderActivity(L, s, filter, setFilter) {
         (0, jsx_runtime_1.h)("div", { className: "panel" },
             (0, jsx_runtime_1.h)("div", { className: "panel-header" },
                 (0, jsx_runtime_1.h)("div", { className: "panel-title" }, "Activity log"),
-                (0, jsx_runtime_1.h)("select", { className: "scenario-select", value: filter, onChange: (e) => setFilter(e.target.value) }, [['all', 'Everything'], ['critical', 'Critical'], ['warning', 'Warnings'], ['success', 'Recoveries'], ['source', 'Source changes'], ['incident', 'Incidents']].map(([v, l]) => ((0, jsx_runtime_1.h)("option", { value: v, selected: filter === v }, l))))),
+                (0, jsx_runtime_1.h)("select", { className: "scenario-select", value: filter, onChange: (e) => setFilter(e.target.value) }, [['all', 'Everything'], ['critical', 'Critical'], ['warning', 'Warnings'], ['success', 'Recoveries'], ['source', 'Source changes'], ['incident', 'Incidents'],
+                    ['audit', 'Audit (who changed what)'], ['alert', 'Alerts']].map(([v, l]) => ((0, jsx_runtime_1.h)("option", { value: v, selected: filter === v }, l))))),
             rows.length === 0 ? (0, jsx_runtime_1.h)(ui_1.Empty, { title: "Nothing logged yet" }, "Connection changes, incidents opening and resolving, and stale-telemetry events appear here as they happen.") : (rows.slice(0, 300).map((a) => ((0, jsx_runtime_1.h)("div", { className: "lv-row", key: a.seq },
                 (0, jsx_runtime_1.h)("span", { className: "mono lv-note", style: { minWidth: '64px' } }, (0, ui_1.clock)(a.t)),
                 (0, jsx_runtime_1.h)(ui_1.Badge, { kind: a.severity === 'critical' ? 'critical' : a.severity === 'warning' ? 'warning' : a.severity === 'success' ? 'healthy' : 'info' }, a.kind),
@@ -3012,6 +3103,178 @@ function renderActivity(L, s, filter, setFilter) {
                         (0, ui_1.duration)(r.duration_seconds),
                         " \u00B7 resolved at ",
                         (0, ui_1.clock)(r.resolved_at))))))))));
+}
+
+  };
+  __modules["live/views_c"] = function(module, exports, require) {
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.renderFleet = renderFleet;
+exports.renderAlerting = renderAlerting;
+exports.renderPersistence = renderPersistence;
+exports.viewerBanner = viewerBanner;
+// Go Live console, part 3: fleet (multi-cluster), alerting and durable-state panels.
+const jsx_runtime_1 = require("../jsx-runtime");
+const ui_1 = require("./ui");
+const views_a_1 = require("./views_a");
+function memberLink(m) {
+    if (m.kind !== 'peer')
+        return '';
+    // Credentials are redacted as ***@ by the server; the link is the bare console address.
+    return m.url.replace(/\/\/\*\*\*@/, '//') + '/';
+}
+function renderFleet(L) {
+    const f = L.fleet;
+    if (!f) {
+        return (0, jsx_runtime_1.h)("div", { className: "panel" },
+            (0, jsx_runtime_1.h)(ui_1.Empty, { title: "Loading the fleet view\u2026" }, "Asking every GPU Lens peer for its summary."));
+    }
+    const t = f.totals;
+    const now = Date.now();
+    return ((0, jsx_runtime_1.h)("div", null,
+        (0, jsx_runtime_1.h)("div", { className: "lv-stat-grid" },
+            (0, jsx_runtime_1.h)(ui_1.Stat, { label: "Clusters / hosts", value: `${t.reachable}/${t.members}`, sub: "reachable / configured", kind: t.reachable < t.members ? 'warning' : '' }),
+            (0, jsx_runtime_1.h)(ui_1.Stat, { label: "GPUs", value: t.gpus_total, sub: `${t.gpus_fresh} reporting fresh telemetry` }),
+            (0, jsx_runtime_1.h)(ui_1.Stat, { label: "Critical incidents", value: t.critical, sub: "across every reachable member", kind: t.critical ? 'critical' : '' }),
+            (0, jsx_runtime_1.h)(ui_1.Stat, { label: "Warnings", value: t.warning, sub: `${t.info} informational`, kind: t.warning ? 'warning' : '' }),
+            (0, jsx_runtime_1.h)(ui_1.Stat, { label: "Need attention", value: t.unhealthy, sub: "unreachable, blocked or critical", kind: t.unhealthy ? 'critical' : '' })),
+        (0, jsx_runtime_1.h)("div", { className: "panel" },
+            (0, jsx_runtime_1.h)("div", { className: "panel-header" },
+                (0, jsx_runtime_1.h)("div", { className: "panel-title" }, "Fleet \u2014 every GPU Lens instance"),
+                (0, jsx_runtime_1.h)("span", { className: "lv-note" },
+                    "refreshed every ",
+                    f.interval_seconds,
+                    "s")),
+            (0, jsx_runtime_1.h)("div", { className: "lv-note", style: { marginBottom: '10px' } }, f.note),
+            (0, jsx_runtime_1.h)("div", { className: "lv-fleet-grid" }, f.members.map((m) => {
+                const s = m.summary;
+                const crit = s ? s.incidents.critical || 0 : 0;
+                const warn = s ? s.incidents.warning || 0 : 0;
+                const link = memberLink(m);
+                return ((0, jsx_runtime_1.h)("div", { className: `lv-fleet-card ${!m.reachable ? 'down' : crit ? 'crit' : warn ? 'warn' : ''}`, key: m.kind + m.name },
+                    (0, jsx_runtime_1.h)("div", { className: "lv-fleet-head" },
+                        (0, jsx_runtime_1.h)("div", null,
+                            (0, jsx_runtime_1.h)("div", { className: "lv-fleet-name" }, s ? s.cluster : m.name),
+                            (0, jsx_runtime_1.h)("div", { className: "lv-note mono" }, m.kind === 'local' ? 'this instance' : `${m.name} · ${m.url}`)),
+                        (0, jsx_runtime_1.h)("div", { style: { display: 'flex', gap: '6px', flexWrap: 'wrap', justifyContent: 'flex-end' } },
+                            m.kind === 'local' && (0, jsx_runtime_1.h)(ui_1.Badge, { kind: "info" }, "local"),
+                            s && s.emulated && (0, jsx_runtime_1.h)(ui_1.Badge, { kind: "info" }, "emulated"),
+                            m.reachable && s ? (0, jsx_runtime_1.h)("span", { className: `badge ${(0, views_a_1.verdictClass)(s.verdict)}` }, s.verdict) : (0, jsx_runtime_1.h)(ui_1.Badge, { kind: "critical" }, "unreachable"))),
+                    m.reachable && s ? ((0, jsx_runtime_1.h)(jsx_runtime_1.Fragment, null,
+                        (0, jsx_runtime_1.h)("div", { className: "lv-fleet-stats" },
+                            (0, jsx_runtime_1.h)("div", null,
+                                (0, jsx_runtime_1.h)("b", null,
+                                    s.gpus_fresh,
+                                    "/",
+                                    s.gpus_total),
+                                (0, jsx_runtime_1.h)("span", null, "GPUs fresh")),
+                            (0, jsx_runtime_1.h)("div", null,
+                                (0, jsx_runtime_1.h)("b", { className: crit ? 'crit' : '' }, crit),
+                                (0, jsx_runtime_1.h)("span", null, "critical")),
+                            (0, jsx_runtime_1.h)("div", null,
+                                (0, jsx_runtime_1.h)("b", { className: warn ? 'warn' : '' }, warn),
+                                (0, jsx_runtime_1.h)("span", null, "warning")),
+                            (0, jsx_runtime_1.h)("div", null,
+                                (0, jsx_runtime_1.h)("b", null,
+                                    s.sources_connected,
+                                    "/",
+                                    s.sources_enabled),
+                                (0, jsx_runtime_1.h)("span", null, "sources"))),
+                        s.top_incidents.length > 0
+                            ? (0, jsx_runtime_1.h)("ul", { className: "lv-fleet-incidents" }, s.top_incidents.map((x) => (0, jsx_runtime_1.h)("li", null, x)))
+                            : (0, jsx_runtime_1.h)("div", { className: "lv-note" }, s.gpus_total ? 'No open incidents.' : 'No GPU telemetry on this member — not the same as healthy.'),
+                        (0, jsx_runtime_1.h)("div", { className: "lv-note mono", style: { marginTop: '6px' } },
+                            s.runtime,
+                            " v",
+                            s.version,
+                            " \u00B7 ",
+                            s.state,
+                            " \u00B7 last cycle ",
+                            s.last_cycle_at ? (0, ui_1.ago)(s.last_cycle_at, now) : 'never',
+                            m.kind === 'peer' ? ` · ${(0, ui_1.num)(m.latency_ms, 0)} ms` : ''))) : ((0, jsx_runtime_1.h)("div", { className: "blindspot-box", style: { marginTop: '8px' } },
+                        (0, jsx_runtime_1.h)("strong", null, "No summary from this member."),
+                        " ",
+                        m.error || 'Not polled yet.',
+                        m.last_ok_at && (0, jsx_runtime_1.h)("span", null,
+                            " Last answered ",
+                            (0, ui_1.ago)(m.last_ok_at, now),
+                            "."))),
+                    link && (0, jsx_runtime_1.h)("a", { className: "btn", style: { marginTop: '8px', display: 'inline-block', textDecoration: 'none' }, href: link, target: "_blank", rel: "noopener noreferrer" }, "Open its console \u2197")));
+            })))));
+}
+function renderAlerting(s, canOperate, busy, sendTest) {
+    const a = s.alerts;
+    if (!a)
+        return null;
+    return ((0, jsx_runtime_1.h)("div", { className: "panel" },
+        (0, jsx_runtime_1.h)("div", { className: "panel-header" },
+            (0, jsx_runtime_1.h)("div", { className: "panel-title" }, "Alerting"),
+            a.enabled ? (0, jsx_runtime_1.h)(ui_1.Badge, { kind: "healthy" },
+                "on \u00B7 ",
+                a.min_severity,
+                "+") : (0, jsx_runtime_1.h)(ui_1.Badge, { kind: "info" }, "off")),
+        (0, jsx_runtime_1.h)("div", { className: "lv-note", style: { marginBottom: '8px' } }, a.note),
+        a.enabled && ((0, jsx_runtime_1.h)("table", { className: "data-table" },
+            (0, jsx_runtime_1.h)("thead", null,
+                (0, jsx_runtime_1.h)("tr", null,
+                    (0, jsx_runtime_1.h)("th", null, "Destination"),
+                    (0, jsx_runtime_1.h)("th", null, "Sent"),
+                    (0, jsx_runtime_1.h)("th", null, "Failed"),
+                    (0, jsx_runtime_1.h)("th", null, "Last delivery"),
+                    (0, jsx_runtime_1.h)("th", null, "Last error"))),
+            (0, jsx_runtime_1.h)("tbody", null, a.destinations.map((d) => ((0, jsx_runtime_1.h)("tr", { key: d.kind },
+                (0, jsx_runtime_1.h)("td", null,
+                    (0, jsx_runtime_1.h)("b", null, d.kind === 'slack' ? 'Slack' : 'Webhook'),
+                    " ",
+                    (0, jsx_runtime_1.h)("span", { className: "lv-note mono" }, d.target),
+                    " ",
+                    d.signed && (0, jsx_runtime_1.h)(ui_1.Badge, { kind: "info" }, "signed")),
+                (0, jsx_runtime_1.h)("td", { className: "mono" }, d.sent),
+                (0, jsx_runtime_1.h)("td", { className: "mono" },
+                    d.failed,
+                    d.dropped ? ` (+${d.dropped} dropped)` : ''),
+                (0, jsx_runtime_1.h)("td", { className: "mono" }, d.last_success_at ? `${(0, ui_1.ago)(d.last_success_at, Date.now())} (${d.last_event})` : 'never'),
+                (0, jsx_runtime_1.h)("td", { className: "lv-note" }, d.last_error || '—'))))))),
+        (0, jsx_runtime_1.h)("div", { className: "lv-toolbar", style: { marginTop: '10px' } },
+            (0, jsx_runtime_1.h)("button", { className: "btn", disabled: !a.enabled || !canOperate || busy !== '', onClick: sendTest }, busy === 'alerts' ? 'Sending…' : 'Send a test alert'),
+            (0, jsx_runtime_1.h)("span", { className: "lv-note" }, a.enabled
+                ? `Tracking ${a.tracked_incidents} open incident(s). Alert destinations can only be changed at startup, never from the browser.`
+                : 'Flags: -alert-slack-webhook, -alert-webhook-url, -alert-webhook-secret-file, -alert-min-severity, -public-url (see docs/ALERTING.md).'))));
+}
+function renderPersistence(s) {
+    const p = s.persistence;
+    if (!p)
+        return null;
+    const now = Date.now();
+    return ((0, jsx_runtime_1.h)("div", { className: "panel" },
+        (0, jsx_runtime_1.h)("div", { className: "panel-header" },
+            (0, jsx_runtime_1.h)("div", { className: "panel-title" }, "Durable live state"),
+            p.enabled ? (p.last_error ? (0, jsx_runtime_1.h)(ui_1.Badge, { kind: "warning" }, "save failing") : (0, jsx_runtime_1.h)(ui_1.Badge, { kind: "healthy" }, "on")) : (0, jsx_runtime_1.h)(ui_1.Badge, { kind: "info" }, "memory only")),
+        (0, jsx_runtime_1.h)("div", { className: "lv-note" }, p.note),
+        p.enabled && ((0, jsx_runtime_1.h)("table", { className: "lv-kv", style: { marginTop: '8px' } },
+            (0, jsx_runtime_1.h)("tbody", null,
+                (0, jsx_runtime_1.h)("tr", null,
+                    (0, jsx_runtime_1.h)("td", null, "File"),
+                    (0, jsx_runtime_1.h)("td", { className: "mono" }, p.path)),
+                (0, jsx_runtime_1.h)("tr", null,
+                    (0, jsx_runtime_1.h)("td", null, "Restored at startup"),
+                    (0, jsx_runtime_1.h)("td", { className: "mono" }, p.loaded_at ? (0, ui_1.ago)(p.loaded_at, now) : 'no earlier state')),
+                (0, jsx_runtime_1.h)("tr", null,
+                    (0, jsx_runtime_1.h)("td", null, "Last saved"),
+                    (0, jsx_runtime_1.h)("td", { className: "mono" }, p.saved_at ? (0, ui_1.ago)(p.saved_at, now) : 'not yet')),
+                p.last_error && (0, jsx_runtime_1.h)("tr", null,
+                    (0, jsx_runtime_1.h)("td", null, "Last error"),
+                    (0, jsx_runtime_1.h)("td", { className: "mono" }, p.last_error)))))));
+}
+function viewerBanner(s) {
+    if (s.status.can_operate !== false)
+        return null;
+    return ((0, jsx_runtime_1.h)("div", { className: "lv-alert info" },
+        (0, jsx_runtime_1.h)("span", null,
+            (0, jsx_runtime_1.h)("b", null, "Read-only access."),
+            " You are signed in as ",
+            (0, jsx_runtime_1.h)("span", { className: "mono" }, s.status.user || 'viewer'),
+            " with the viewer role: you can watch everything, but pausing collection, re-checking, thresholds, connections and test alerts need an admin.")));
 }
 
   };
