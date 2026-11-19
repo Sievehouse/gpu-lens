@@ -1,10 +1,13 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 The GPU Lens Authors
+
 package store
 
 import (
 	"testing"
 	"time"
 
-	"github.com/gpulens/gpu-lens/internal/domain"
+	"github.com/Sievehouse/gpu-lens/internal/domain"
 )
 
 func TestIncidentDeduplicationOnRepeatedEvaluations(t *testing.T) {
