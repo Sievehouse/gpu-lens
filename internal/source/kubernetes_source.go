@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 The GPU Lens Authors
+
 package source
 
 import (
@@ -13,7 +16,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gpulens/gpu-lens/internal/domain"
+	"github.com/Sievehouse/gpu-lens/internal/domain"
 )
 
 // GPUResourceName is the extended resource advertised by the NVIDIA Kubernetes device plugin.
