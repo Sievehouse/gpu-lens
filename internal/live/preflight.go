@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 The GPU Lens Authors
+
 package live
 
 import (
@@ -7,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gpulens/gpu-lens/internal/source"
+	"github.com/Sievehouse/gpu-lens/internal/source"
 )
 
 type checkBuilder struct {
@@ -194,6 +197,26 @@ func (e *Engine) preflightLocked(now time.Time) PreflightReport {
 					"Connect a DCGM exporter for full hardware-health and failure-correlation coverage.", nil)
 			} else if len(res.GPUs) > 0 {
 				b.add("nvsmi.coverage", "Hardware-fault signal coverage", CheckPass, "Local GPUs are also covered by DCGM telemetry, so fault counters are available.", "", nil)
+			}
+		}
+	}
+
+	// --- Local AMD driver (experimental) ----------------------------------------------------------
+	b.group("amd", "Local AMD driver (amd-smi, experimental)")
+	if amdSt := e.src[SourceAMDSMI]; amdSt != nil && b.sourceGate(amdSt, "amd.query", "Driver query") {
+		res := amdSt.amd
+		if res == nil {
+			b.add("amd.query", "Driver query", CheckPending, "Checking…", "", nil)
+		} else {
+			status := CheckPass
+			if amdSt.status.State == StateDegraded {
+				status = CheckWarn
+			}
+			b.add("amd.query", "Driver query", status, fmt.Sprintf("%s — %s.", amdSt.status.Detail, res.BinaryPath), amdSt.status.Hint, amdSt.status.LastLatencyMs)
+			if f.amdGPUs > 0 {
+				b.add("amd.coverage", "Hardware-fault signal coverage", CheckWarn,
+					fmt.Sprintf("%s read through amd-smi: utilization, VRAM, temperature, power and ECC counts are evaluated; NVIDIA-specific signals (Xid, NVLink, row remapping) have no AMD equivalent in GPU Lens yet.", plural(f.amdGPUs, "AMD GPU is", "AMD GPUs are")),
+					"AMD support is experimental. Please report what you see on real hardware.", nil)
 			}
 		}
 	}
