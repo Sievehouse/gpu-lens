@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 The GPU Lens Authors
+
 package live
 
 import (
@@ -7,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gpulens/gpu-lens/internal/domain"
-	"github.com/gpulens/gpu-lens/internal/source"
+	"github.com/Sievehouse/gpu-lens/internal/domain"
+	"github.com/Sievehouse/gpu-lens/internal/source"
 )
 
 const maxActivityPerTick = 24
@@ -71,7 +74,17 @@ func (e *Engine) trackIncidentsLocked(incidents []domain.Incident, now time.Time
 			if inc.EvalStatus == domain.EvalStatusInconclusive {
 				sev = "inconclusive"
 			}
-			e.addActivityLocked(now, sev, "incident", fmt.Sprintf("Incident opened [%s]", inc.RuleID), inc.Title)
+			if since, ok := e.restoredFirstSeen[inc.Fingerprint]; ok {
+				// Still firing after a GPU Lens restart: keep its original age instead of reporting a new incident.
+				delete(e.restoredFirstSeen, inc.Fingerprint)
+				if since.Before(inc.FirstSeenAt) {
+					inc.FirstSeenAt = since
+				}
+				e.addActivityLocked(now, sev, "incident", fmt.Sprintf("Incident still open [%s]", inc.RuleID),
+					inc.Title+" — open since before GPU Lens restarted.")
+			} else {
+				e.addActivityLocked(now, sev, "incident", fmt.Sprintf("Incident opened [%s]", inc.RuleID), inc.Title)
+			}
 		}
 		if inc.LastSeenAt.Before(now) {
 			inc.LastSeenAt = now
@@ -98,6 +111,9 @@ func (e *Engine) trackIncidentsLocked(incidents []domain.Incident, now time.Time
 		e.resolved = append([]ResolvedIncident(nil), e.resolved[len(e.resolved)-maxResolvedIncidents:]...)
 	}
 	e.open = next
+	if e.tick >= 3 {
+		e.restoredFirstSeen = nil
+	}
 	return incidents
 }
 
@@ -315,7 +331,7 @@ func (e *Engine) diffActivityLocked(now time.Time, incidents []domain.Incident) 
 	}
 
 	// Sources
-	for _, id := range []string{SourceHost, SourceNvidiaSMI, SourceDCGM, SourcePrometheus, SourceKubernetes} {
+	for _, id := range []string{SourceHost, SourceNvidiaSMI, SourceAMDSMI, SourceDCGM, SourcePrometheus, SourceKubernetes} {
 		st := e.src[id]
 		if st == nil {
 			continue
@@ -527,6 +543,15 @@ func (e *Engine) buildViewsLocked(uuids []string, incidents []domain.Incident) {
 		if d.TotalMemoryMiB <= 0 && d.Latest.FBUsedMiB+d.Latest.FBFreeMiB > 0 {
 			v.TotalMemoryMiB = d.Latest.FBUsedMiB + d.Latest.FBFreeMiB
 		}
+		exp := map[string]bool{}
+		for _, o := range ds.obs {
+			for k, ok := range o.exported {
+				if ok {
+					exp[k] = true
+				}
+			}
+		}
+		v.ExportedMetrics = sortedKeys(exp)
 		if fb, ok := fbPercent(d); ok {
 			r := round1(fb)
 			v.FBUsedPercent = &r
