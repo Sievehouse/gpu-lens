@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """
 GPU Lens Local Runtime Server & Deterministic Diagnostic Engine (1:1 Parity with Go Backend).
 Provides SQLite persistence (`sqlite3`), deterministic evaluation of all 6 diagnostic rules,
@@ -14,6 +15,7 @@ import os
 import sqlite3
 import sys
 import threading
+import time
 import urllib.parse
 from datetime import datetime, timezone
 
@@ -1776,16 +1778,62 @@ class GPULensAppState:
         }
 
 
-def make_handler(state: GPULensAppState, live_api=None):
+def make_handler(state: GPULensAppState, live_api=None, extras=None, fleet=None):
+    extras = extras or {"admin_user": "", "admin_pass": "", "viewer_user": "", "viewer_pass": ""}
+    auth_enabled = bool(extras["admin_user"] and extras["admin_pass"])
+    audit = live_api.audit if live_api is not None else gpulens_live.AuditLog()
+    http_counts = {}
+    counts_lock = threading.Lock()
+    started_at = time.time()
+    private_paths = ("/api/v1/audit", "/api/v1/fleet", "/metrics")
+
     class Handler(http.server.BaseHTTPRequestHandler):
+        principal = ("anonymous", "admin")
+
         def log_message(self, fmt, *args):
             pass
 
-        def _send_json(self, code: int, payload):
+        def send_response(self, code, message=None):
+            with counts_lock:
+                http_counts[code] = http_counts.get(code, 0) + 1
+            super().send_response(code, message)
+
+        def end_headers(self):
+            # No framing (clickjacking), no MIME sniffing, no referrer leakage — same as the Go server.
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("X-Frame-Options", "DENY")
+            self.send_header("Referrer-Policy", "no-referrer")
+            super().end_headers()
+
+        def _authenticate(self, path):
+            if not auth_enabled or path in ("/healthz", "/readyz"):
+                return True
+            who = gpulens_live.check_basic_auth(self.headers.get("Authorization", ""), extras)
+            if who:
+                self.principal = who
+                return True
+            raw = json.dumps({"error": "authentication required"}).encode("utf-8")
+            self.send_response(401)
+            self.send_header("WWW-Authenticate", 'Basic realm="GPU Lens", charset="UTF-8"')
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+            return False
+
+        def _audit_scenario(self, before, after):
+            if after and after in state.scenarios and before != after:
+                remote = gpulens_live.remote_label(self.client_address[0], {k: v for k, v in self.headers.items()})
+                audit.record(self.principal[0], self.principal[1], remote, "simulation.scenario.select", f"{before} → {after}")
+
+        def _send_json(self, code: int, payload, private=False):
             raw = json.dumps(payload).encode("utf-8")
             self.send_response(code)
             self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.send_header("Access-Control-Allow-Origin", "*")
+            if private:
+                self.send_header("Cache-Control", "no-store")
+            else:
+                self.send_header("Access-Control-Allow-Origin", "*")
             self.send_header("Content-Length", str(len(raw)))
             self.end_headers()
             self.wfile.write(raw)
@@ -1803,7 +1851,7 @@ def make_handler(state: GPULensAppState, live_api=None):
                         n = 0
                     body = self.rfile.read(min(n, 64 * 1024 + 1)) if n > 0 else b""
                 headers = {k: v for k, v in self.headers.items()}
-                status, payload = live_api.handle(method, parsed.path, {k: v[0] for k, v in qs.items()}, headers, self.client_address[0], body)
+                status, payload = live_api.handle(method, parsed.path, {k: v[0] for k, v in qs.items()}, headers, self.client_address[0], body, self.principal)
             raw = json.dumps(payload).encode("utf-8")
             self.send_response(status)
             self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -1816,8 +1864,34 @@ def make_handler(state: GPULensAppState, live_api=None):
             parsed = urllib.parse.urlparse(self.path)
             qs = urllib.parse.parse_qs(parsed.query)
             scen_param = qs.get("scenario", [""])[0]
+            if not self._authenticate(parsed.path):
+                return
+            if scen_param:
+                self._audit_scenario(state.active_id, scen_param)
             if gpulens_live.is_live_path(parsed.path):
                 return self._live("GET", parsed, qs)
+            if parsed.path == "/metrics":
+                with counts_lock:
+                    snapshot = dict(http_counts)
+                raw = gpulens_live.render_metrics(live_api.engine if live_api else None, snapshot, auth_enabled, started_at).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+                return
+            if parsed.path == "/api/v1/audit":
+                try:
+                    since = max(0, int(qs.get("since", ["0"])[0]))
+                except ValueError:
+                    since = 0
+                entries = audit.list(since)
+                return self._send_json(200, {"count": len(entries), "persistent": bool(audit.path), "entries": entries}, private=True)
+            if parsed.path == "/api/v1/fleet" and fleet is not None:
+                if not gpulens_live._same_origin({k: v for k, v in self.headers.items()}):
+                    return self._send_json(403, {"error": "fleet API refused: cross-site requests are not allowed"}, private=True)
+                return self._send_json(200, fleet.view(), private=True)
 
             if parsed.path == "/healthz":
                 return self._send_json(200, {"status": "ok", "service": "gpu-lens"})
@@ -1890,6 +1964,8 @@ def make_handler(state: GPULensAppState, live_api=None):
 
         def do_POST(self):
             parsed = urllib.parse.urlparse(self.path)
+            if not self._authenticate(parsed.path):
+                return
             if gpulens_live.is_live_path(parsed.path):
                 return self._live("POST", parsed, urllib.parse.parse_qs(parsed.query))
             if self.path == "/api/v1/scenarios/select":
@@ -1898,6 +1974,7 @@ def make_handler(state: GPULensAppState, live_api=None):
                 sid = body.get("scenario_id", "").strip()
                 if sid not in state.scenarios:
                     return self._send_json(400, {"error": f"unknown scenario_id {sid}"})
+                self._audit_scenario(state.active_id, sid)
                 return self._send_json(200, state.build_overview(sid))
             self._send_json(405, {"error": "method not allowed"})
 
@@ -1918,11 +1995,32 @@ def main():
     state = GPULensAppState(args.fixtures_dir, args.scenario, args.db_path, args.static_dir)
     try:
         live_cfg = gpulens_live.build_config(args)
-    except gpulens_live.LiveError as e:
+        extras = gpulens_live.build_extras(args)
+        notifier = gpulens_live.AlertNotifier.create(extras["slack"], extras["webhook"], extras["secret"], extras["min_severity"], extras["public_url"])
+        audit = gpulens_live.AuditLog(extras["audit_file"])
+    except (gpulens_live.LiveError, OSError) as e:
         raise SystemExit(f"invalid startup configuration: {e}")
     engine = gpulens_live.Engine(sys.modules[__name__], live_cfg)
-    srv = http.server.ThreadingHTTPServer((args.host, args.port), make_handler(state, gpulens_live.LiveAPI(engine)))
-    print(f"GPU Lens server listening on http://127.0.0.1:{args.port} (scenario={state.active_id}, mode={args.mode}, live console={'on' if live_cfg['enabled'] else 'off'})")
+    engine.set_alerter(notifier)
+    try:
+        engine.set_state_file(extras["state_file"])
+    except gpulens_live.LiveError as e:
+        print(f"warning: live state file could not be loaded; starting with a fresh state ({e})")
+    auth_enabled = bool(extras["admin_user"])
+    fleet = gpulens_live.FleetHub(engine, extras["peers"], extras["fleet_interval"])
+    fleet.start()
+    srv = http.server.ThreadingHTTPServer((args.host, args.port), make_handler(state, gpulens_live.LiveAPI(engine, audit, auth_enabled), extras, fleet))
+    print(f"GPU Lens server listening on http://127.0.0.1:{args.port} (scenario={state.active_id}, mode={args.mode}, live console={'on' if live_cfg['enabled'] else 'off'}, "
+          f"version={gpulens_live.VERSION}, auth={'on' if auth_enabled else 'off'}, alerts={'on' if notifier else 'off'}, peers={len(extras['peers'])})")
+    if not auth_enabled and args.host not in ("127.0.0.1", "localhost", "::1"):
+        print("warning: authentication is off and GPU Lens is reachable from other machines: anyone who can reach it can change live thresholds. "
+              "Set --basic-auth-user/--basic-auth-pass-file or put it behind an authenticating proxy (docs/AUTH.md).")
+    if extras["state_file"]:
+        def saver():
+            while True:
+                time.sleep(30)
+                engine.save_state()
+        threading.Thread(target=saver, daemon=True).start()
     if live_cfg["enabled"] and live_cfg["auto_start"]:
         engine.start()
     try:
@@ -1931,6 +2029,7 @@ def main():
         pass
     finally:
         engine.stop("GPU Lens is shutting down.")
+        engine.save_state()
 
 
 if __name__ == "__main__":
