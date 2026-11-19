@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """
 Automated Verification & Test Suite for GPU Lens.
 Executes unit and integration tests covering:
@@ -240,7 +241,10 @@ class TestGPULensDiagnosticSuite(unittest.TestCase):
             self.assertTrue(os.path.isfile(full), f"Missing Go file: {rel}")
             with open(full, "r", encoding="utf-8") as f:
                 content = f.read()
-            self.assertTrue(content.startswith("package "), f"Invalid package header in {rel}")
+            # Skip the SPDX/copyright header and doc comments; the first code line must be the package clause.
+            code = [l for l in content.splitlines() if l.strip() and not l.lstrip().startswith("//")]
+            self.assertTrue(code and code[0].startswith("package "), f"Invalid package header in {rel}")
+            self.assertIn("SPDX-License-Identifier: Apache-2.0", content.splitlines()[0], f"Missing SPDX header in {rel}")
             self.assertEqual(content.count("{"), content.count("}"), f"Unbalanced braces in {rel}")
 
 
