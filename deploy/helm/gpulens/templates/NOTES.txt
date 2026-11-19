@@ -1,0 +1,21 @@
+GPU Lens {{ .Chart.AppVersion }} is installed (read-only: get/list/watch on nodes, pods and events).
+
+Open the console:
+{{- if .Values.ingress.enabled }}
+  https://{{ .Values.ingress.host }}
+{{- else }}
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "gpulens.fullname" . }} 8080:{{ .Values.service.port }}
+  then open http://127.0.0.1:8080  (Go Live opens first; the simulation is at /?view=demo)
+{{- end }}
+
+{{- if not .Values.auth.enabled }}
+
+WARNING: authentication is off. Anyone who can reach the service can change live rule thresholds.
+Set auth.enabled=true (and use an Ingress with TLS) before exposing it.
+{{- end }}
+{{- if not (or .Values.sources.dcgmExporterUrl .Values.sources.prometheusUrl) }}
+
+Tip: point GPU Lens at your GPU telemetry, e.g.
+  --set sources.dcgmExporterUrl=http://nvidia-dcgm-exporter.gpu-operator.svc:9400/metrics
+Without it, Go Live sees Kubernetes scheduling but no GPU metrics, and says so instead of looking healthy.
+{{- end }}
