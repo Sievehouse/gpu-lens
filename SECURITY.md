@@ -8,12 +8,14 @@ GPU Lens is designed as a **strictly read-only, non-invasive diagnostic and capa
    - GPU Lens never creates, updates, patches, deletes, evicts, or scales Kubernetes resources (`Pods`, `Jobs`, `Nodes`, `Deployments`, `DaemonSets`, `ResourceClaims`).
    - GPU Lens never cordons, uncordons, taints, labels, or drains Kubernetes nodes.
 2. **Minimal Host Execution and No Invasive GPU Diagnostics**:
-   - The one local command GPU Lens can run (Go Live only) is `nvidia-smi`, started directly (no shell) with a fixed allow-list of `--query-gpu` / `--query-compute-apps` / `--format` arguments, an 8-second timeout and a bounded output size. It is discovered from `PATH` and well-known install directories, or given with `--nvidia-smi-path`, and can be disabled with `--no-nvidia-smi`. Host vitals are read from `/proc` and `/sys` only.
+   - The only local commands GPU Lens can run (Go Live only) are `nvidia-smi` — started directly (no shell) with a fixed allow-list of `--query-gpu` / `--query-compute-apps` / `--format` arguments — and `amd-smi`, limited to exactly four invocations (`list --json`, `static --json`, `metric --json`, `process --json`). Both have an 8-second timeout and a bounded output size, are discovered from `PATH` and well-known install directories (or given with `--nvidia-smi-path` / `--amd-smi-path`), and can be disabled with `--no-nvidia-smi` / `--no-amd-smi`. Host vitals are read from `/proc` and `/sys` only.
    - GPU Lens never opens SSH sessions, `pods/exec` streams, or privileged host containers.
    - GPU Lens never triggers active GPU stress tests or invasive diagnostics (such as `dcgmi diag -r 2/3` or `nccl-loopback`), which can disrupt production workloads or require exclusive GPU access.
-3. **Zero External Data Egress or AI API Dependencies**:
+3. **No AI API Dependencies and No Egress Unless You Ask for It**:
    - GPU Lens contains no OpenAI, Anthropic, Gemini, or other LLM/AI SDKs, no MCP servers, and no external telemetry beacons.
    - All diagnostic evaluation happens locally in process using deterministic rules.
+   - The only outbound write is **alert delivery**, and only to Slack / webhook URLs an operator sets at startup (flags or environment variables). Destinations cannot be set or changed over the HTTP API, redirects are not followed, delivery uses its own HTTP client (never the telemetry transport), and Slack webhook paths are never displayed or logged. Without a configured destination, GPU Lens makes no outbound POST at all.
+   - Fleet hubs read other GPU Lens instances' `/api/v1/live/summary` with the same GET-only transport as every telemetry source.
 
 ---
 
@@ -121,4 +123,23 @@ The live API (`/api/v1/live/*`) exposes real host and cluster data and accepts s
 | Resource exhaustion | Response size caps, per-request timeouts, bounded history / activity / resolved-incident buffers, 64 KiB request bodies, and an idle timeout that stops collection when no viewer is attached |
 | Misleading output | Synthetic Live Lab data is always labelled (`live_emulated`, banner, per-GPU flag); missing telemetry is reported as missing, never as healthy or zero |
 
-Residual risk: with `--live-allow-remote-config` any client that can reach the port can re-point the collector and read the cluster view. Put it behind your own authentication, or leave it off and bind to loopback (the shipped `docker-compose.yml` publishes on `127.0.0.1` only).
+| Unauthorised operators | Optional HTTP basic auth for every path except `/healthz` and `/readyz`, with an **admin** and a read-only **viewer** role; credentials compared in constant time; the server enforces roles regardless of the UI. See [docs/AUTH.md](docs/AUTH.md) |
+| Repudiation | Audit log of every threshold, connection, collection, test-alert and scenario change, including refused attempts, with actor, role and remote address; optionally appended to a `0600` JSON-lines file. Secrets are never recorded |
+| Clickjacking / sniffing | `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer` on every response |
+| Alert webhook abuse | Destinations are startup-only; HMAC-SHA256 signature (`X-GPULens-Signature-256`) lets receivers reject forged alerts |
+
+Residual risk: without authentication, anyone who can reach the port can change live thresholds and pause collection; with `--live-allow-remote-config` they can also re-point the collector. GPU Lens logs a warning at startup when authentication is off and it listens on a non-loopback address. Enable basic auth (and TLS in front), use an authenticating proxy, or bind to loopback (the shipped `docker-compose.yml` publishes on `127.0.0.1` only).
+
+---
+
+## 7. Reporting a Vulnerability
+
+Please report security issues **privately** through GitHub: open the repository's **Security** tab and choose **Report a vulnerability** (GitHub private vulnerability reporting). Do not open a public issue for a vulnerability.
+
+Include the version (`gpulens -version` or the console's top bar), the runtime (Go or Python), how GPU Lens was started (flags, with secrets removed) and the steps to reproduce. You can expect an acknowledgement within a few days. Fixes are released as a new tagged version and noted in [CHANGELOG.md](CHANGELOG.md).
+
+Supported versions: the latest release.
+
+## 8. Supply-Chain and Continuous Security Checks
+
+Every push and pull request runs: CodeQL (Go, TypeScript, Python), `govulncheck` (Go code and standard library), `npm audit` (frontend toolchain), a Trivy scan of the container image (results in the Security tab; fixable critical findings fail the build), and the OpenSSF Scorecard. Dependabot keeps Go modules, npm packages, the Docker base images and GitHub Actions up to date. The Go module has no third-party dependencies.
