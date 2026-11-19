@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """
 Deterministic Offline Fixture Generator for GPU Lens.
 Generates 6 realistic, reproducible cluster scenarios in fixtures/*.json with zero randomness.
