@@ -776,3 +776,24 @@ html[data-theme="light"] .golive-launcher { box-shadow: 0 8px 24px rgba(220, 38,
 .lv-welcome-card { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; border: 1px solid var(--border-subtle); border-radius: 10px; padding: 14px; background: var(--bg-muted); }
 .lv-welcome-card > b { font-size: 14px; }
 .lv-welcome-card > span { color: var(--text-secondary); font-size: 13px; flex: 1; }
+
+/* ---------- 0.3: info banner, fleet (multi-cluster) cards ---------- */
+.lv-alert.info { background: rgba(56, 189, 248, 0.08); border-bottom: 1px solid var(--accent-blue); color: #bae6fd; }
+html[data-theme="light"] .lv-alert.info { background: #f0f9ff; color: #075985; }
+.lv-fleet-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 14px; }
+.lv-fleet-card { border: 1px solid var(--border-subtle); border-left: 4px solid var(--status-healthy); border-radius: 10px; padding: 14px 16px; background: var(--bg-elevated); }
+.lv-fleet-card.warn { border-left-color: var(--status-warning); }
+.lv-fleet-card.crit { border-left-color: var(--status-critical); }
+.lv-fleet-card.down { border-left-color: var(--text-muted); opacity: 0.95; }
+.lv-fleet-head { display: flex; justify-content: space-between; gap: 10px; align-items: flex-start; margin-bottom: 10px; }
+.lv-fleet-name { font-weight: 700; font-size: 15px; color: var(--text-primary); }
+.lv-fleet-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 8px; }
+.lv-fleet-stats div { display: flex; flex-direction: column; background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: 8px; padding: 6px 8px; }
+.lv-fleet-stats b { font-size: 16px; font-family: var(--font-mono, ui-monospace, monospace); color: var(--text-primary); }
+.lv-fleet-stats b.crit { color: var(--status-critical); }
+.lv-fleet-stats b.warn { color: var(--status-warning); }
+.lv-fleet-stats span { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.lv-fleet-incidents { margin: 4px 0 0 18px; padding: 0; font-size: 12.5px; color: var(--text-secondary); }
+.lv-fleet-incidents li { margin: 2px 0; }
+html[data-theme="light"] .lv-fleet-card { background: #ffffff; box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04); }
+html[data-theme="light"] .lv-fleet-stats div { background: #f8fafc; }
