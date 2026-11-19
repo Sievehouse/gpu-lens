@@ -1,0 +1,519 @@
+openapi: 3.1.0
+info:
+  title: GPU Lens API
+  version: 0.3.0
+  summary: Read-only GPU fleet reliability and capacity console.
+  description: |
+    The same API is served by the Go binary (`cmd/gpulens`) and the Python runtime (`scripts/local_runtime_server.py`).
+
+    * `/api/v1/*` (except `/api/v1/live/*`, `/api/v1/audit`, `/api/v1/fleet`) is the **simulation**: deterministic
+      fixture scenarios, permissive CORS.
+    * `/api/v1/live/*` is **Go Live**: real telemetry. Same-origin only (no CORS headers), a local `Host` header is
+      required for loopback connections (DNS-rebinding defence), and every POST needs `Content-Type: application/json`.
+    * When basic authentication is enabled every path except `/healthz` and `/readyz` needs credentials. The `viewer`
+      role can read everything and resume collection; everything that changes state needs the `admin` role.
+
+    GPU Lens never writes to your infrastructure. The only outbound write is alert delivery to destinations set at
+    startup (see `docs/ALERTING.md`).
+  license:
+    name: Apache-2.0
+    identifier: Apache-2.0
+servers:
+  - url: http://127.0.0.1:8080
+    description: Local instance
+security:
+  - {}
+  - basicAuth: []
+tags:
+  - name: probes
+  - name: simulation
+    description: Deterministic fixture scenarios.
+  - name: live
+    description: Live telemetry ("Go Live").
+  - name: operations
+    description: Audit log, fleet view and self-metrics.
+
+paths:
+  /healthz:
+    get:
+      tags: [probes]
+      summary: Liveness probe (always public)
+      security: [{}]
+      responses:
+        "200": {description: Alive, content: {application/json: {schema: {type: object}}}}
+  /readyz:
+    get:
+      tags: [probes]
+      summary: Readiness probe (always public)
+      security: [{}]
+      responses:
+        "200": {description: Ready, content: {application/json: {schema: {type: object}}}}
+        "503": {description: Not ready}
+  /metrics:
+    get:
+      tags: [operations]
+      summary: GPU Lens's own health in the Prometheus text format
+      description: Build info, HTTP requests, collection cycles, per-source up/latency, GPU counts, open incidents, alert deliveries and state-file saves. GPU telemetry itself is never re-exported.
+      responses:
+        "200":
+          description: Prometheus exposition format 0.0.4
+          content:
+            text/plain:
+              schema: {type: string}
+              example: |
+                gpulens_build_info{goversion="go1.24.7",runtime="go",version="0.3.0"} 1
+                gpulens_live_running 1
+                gpulens_live_source_up{source="dcgm_exporter",state="connected"} 1
+                gpulens_live_incidents_open{severity="critical"} 0
+        "401": {$ref: "#/components/responses/Unauthorized"}
+
+  /api/v1/overview:
+    get:
+      tags: [simulation]
+      summary: Fleet overview of the active scenario
+      parameters: [{$ref: "#/components/parameters/Scenario"}]
+      responses:
+        "200": {description: Overview, content: {application/json: {schema: {$ref: "#/components/schemas/Overview"}}}}
+  /api/v1/incidents:
+    get:
+      tags: [simulation]
+      summary: Incident queue of the active scenario
+      parameters:
+        - {$ref: "#/components/parameters/Scenario"}
+        - {name: severity, in: query, schema: {type: string, enum: [critical, warning, info]}}
+        - {name: category, in: query, schema: {type: string}}
+        - {name: q, in: query, description: Free-text search, schema: {type: string}}
+      responses:
+        "200":
+          description: Incidents
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  scenario_id: {type: string}
+                  data_mode: {type: string}
+                  count: {type: integer}
+                  incidents: {type: array, items: {$ref: "#/components/schemas/Incident"}}
+  /api/v1/incidents/{id}:
+    get:
+      tags: [simulation]
+      summary: One incident with its full evidence
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string}}
+        - {$ref: "#/components/parameters/Scenario"}
+      responses:
+        "200": {description: Incident, content: {application/json: {schema: {$ref: "#/components/schemas/Incident"}}}}
+        "404": {$ref: "#/components/responses/Error"}
+  /api/v1/capacity:
+    get:
+      tags: [simulation]
+      summary: Capacity and utilization report
+      parameters: [{$ref: "#/components/parameters/Scenario"}]
+      responses:
+        "200": {description: Capacity report, content: {application/json: {schema: {type: object}}}}
+  /api/v1/sources:
+    get:
+      tags: [simulation]
+      summary: Telemetry sources, exported metrics and metric mappings
+      parameters: [{$ref: "#/components/parameters/Scenario"}]
+      responses:
+        "200": {description: Sources, content: {application/json: {schema: {type: object}}}}
+  /api/v1/rules:
+    get:
+      tags: [simulation]
+      summary: The deterministic rule registry with thresholds
+      responses:
+        "200": {description: Rules, content: {application/json: {schema: {type: object, properties: {count: {type: integer}, rules: {type: array, items: {type: object}}}}}}}
+  /api/v1/scenarios:
+    get:
+      tags: [simulation]
+      summary: List the simulation scenarios
+      responses:
+        "200": {description: Scenarios, content: {application/json: {schema: {type: object}}}}
+  /api/v1/scenarios/select:
+    post:
+      tags: [simulation]
+      summary: Switch the active scenario (audited)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {type: object, required: [scenario_id], properties: {scenario_id: {type: string, example: scenario-5-correlated-failure}}}
+      responses:
+        "200": {description: Overview of the new scenario, content: {application/json: {schema: {$ref: "#/components/schemas/Overview"}}}}
+        "400": {$ref: "#/components/responses/Error"}
+
+  /api/v1/audit:
+    get:
+      tags: [operations]
+      summary: Audit log — who changed what, including refused attempts
+      parameters:
+        - {name: since, in: query, description: Only entries with a larger sequence number, schema: {type: integer, minimum: 0}}
+      responses:
+        "200":
+          description: Audit entries, oldest first
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  count: {type: integer}
+                  persistent: {type: boolean, description: True when entries are also appended to a file}
+                  entries: {type: array, items: {$ref: "#/components/schemas/AuditEntry"}}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+  /api/v1/fleet:
+    get:
+      tags: [operations]
+      summary: Multi-cluster view — this instance plus every configured peer
+      responses:
+        "200": {description: Fleet view, content: {application/json: {schema: {$ref: "#/components/schemas/FleetView"}}}}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+
+  /api/v1/live/status:
+    get:
+      tags: [live]
+      summary: Engine status (does not count as a viewer for the idle timer)
+      responses:
+        "200": {description: Status, content: {application/json: {schema: {$ref: "#/components/schemas/LiveStatus"}}}}
+        "403": {$ref: "#/components/responses/Error"}
+  /api/v1/live/state:
+    get:
+      tags: [live]
+      summary: Full live payload (status, preflight, GPUs, incidents, history, activity, alerts, persistence)
+      parameters:
+        - {name: since, in: query, description: Last history sequence the caller holds, schema: {type: integer, minimum: 0}}
+        - {name: activity_since, in: query, description: Last activity sequence the caller holds, schema: {type: integer, minimum: 0}}
+      responses:
+        "200": {description: Live state, content: {application/json: {schema: {$ref: "#/components/schemas/LiveState"}}}}
+  /api/v1/live/summary:
+    get:
+      tags: [live]
+      summary: Compact health of this instance, polled by fleet hubs
+      responses:
+        "200": {description: Summary, content: {application/json: {schema: {$ref: "#/components/schemas/Summary"}}}}
+  /api/v1/live/start:
+    post:
+      tags: [live]
+      summary: Start (or keep) collecting. Viewers may resume; changing the interval needs admin.
+      requestBody:
+        content:
+          application/json:
+            schema: {type: object, additionalProperties: false, properties: {interval_seconds: {type: number, minimum: 1, maximum: 300}}}
+      responses:
+        "200": {description: Live state, content: {application/json: {schema: {$ref: "#/components/schemas/LiveState"}}}}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "409": {$ref: "#/components/responses/Error"}
+  /api/v1/live/stop:
+    post:
+      tags: [live]
+      summary: Pause collection (admin, audited)
+      requestBody: {$ref: "#/components/requestBodies/Empty"}
+      responses:
+        "200": {description: Live state, content: {application/json: {schema: {$ref: "#/components/schemas/LiveState"}}}}
+        "403": {$ref: "#/components/responses/Forbidden"}
+  /api/v1/live/recheck:
+    post:
+      tags: [live]
+      summary: Re-check every source now (admin, audited)
+      requestBody: {$ref: "#/components/requestBodies/Empty"}
+      responses:
+        "200": {description: Live state, content: {application/json: {schema: {$ref: "#/components/schemas/LiveState"}}}}
+        "403": {$ref: "#/components/responses/Forbidden"}
+  /api/v1/live/config:
+    post:
+      tags: [live]
+      summary: Change live connections (admin, audited; connection fields also need a local browser or -live-allow-remote-config)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ConfigPatch"}
+      responses:
+        "200": {description: Live state, content: {application/json: {schema: {$ref: "#/components/schemas/LiveState"}}}}
+        "400": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+  /api/v1/live/thresholds:
+    post:
+      tags: [live]
+      summary: Override live rule thresholds (admin, audited). The simulation always uses the defaults.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                overrides: {type: object, additionalProperties: {type: number}, example: {temp_warning_celsius: 78}}
+                reset: {type: boolean, description: Drop every override first}
+      responses:
+        "200": {description: Live state, content: {application/json: {schema: {$ref: "#/components/schemas/LiveState"}}}}
+        "400": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+  /api/v1/live/alerts:
+    get:
+      tags: [live]
+      summary: Alert destinations and their delivery record
+      responses:
+        "200": {description: Alert status, content: {application/json: {schema: {$ref: "#/components/schemas/AlertStatus"}}}}
+  /api/v1/live/alerts/test:
+    post:
+      tags: [live]
+      summary: Send a test alert to every destination (admin, audited)
+      requestBody: {$ref: "#/components/requestBodies/Empty"}
+      responses:
+        "200":
+          description: Per-destination outcome
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  results:
+                    type: array
+                    items: {type: object, properties: {kind: {type: string}, target: {type: string}, ok: {type: boolean}, error: {type: string}}}
+                  status: {$ref: "#/components/schemas/AlertStatus"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "409": {description: No alert destination is configured, content: {application/json: {schema: {$ref: "#/components/schemas/Error"}}}}
+
+components:
+  securitySchemes:
+    basicAuth:
+      type: http
+      scheme: basic
+      description: Enabled with -basic-auth-user/-basic-auth-pass-file (admin) and optionally -viewer-user/-viewer-pass-file.
+  parameters:
+    Scenario:
+      name: scenario
+      in: query
+      description: Switch to this simulation scenario first (audited when it changes the active scenario).
+      schema: {type: string}
+  requestBodies:
+    Empty:
+      content:
+        application/json:
+          schema: {type: object, maxProperties: 0}
+  responses:
+    Error:
+      description: Error
+      content: {application/json: {schema: {$ref: "#/components/schemas/Error"}}}
+    Unauthorized:
+      description: Credentials required
+      headers:
+        WWW-Authenticate: {schema: {type: string}, example: 'Basic realm="GPU Lens", charset="UTF-8"'}
+      content: {application/json: {schema: {$ref: "#/components/schemas/Error"}}}
+    Forbidden:
+      description: Refused — viewer role, cross-site request, unexpected Host header, or a remote connection change
+      content: {application/json: {schema: {$ref: "#/components/schemas/Error"}}}
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error: {type: string}
+    Incident:
+      type: object
+      description: A deterministic, evidence-backed finding.
+      properties:
+        id: {type: string}
+        fingerprint: {type: string}
+        rule_id: {type: string, example: GPU-HEALTH-002}
+        rule_name: {type: string}
+        category: {type: string, enum: [scheduling, hardware_health, utilization, failure_correlation, data_freshness, thermal_power_memory]}
+        severity: {type: string, enum: [critical, warning, info]}
+        eval_status: {type: string}
+        evidence_strength: {type: string}
+        title: {type: string}
+        summary: {type: string}
+        observed_facts: {type: array, items: {type: string}}
+        possible_causes: {type: array, items: {type: string}}
+        supporting_evidence: {type: array, items: {type: object}}
+        contradicting_evidence: {type: array, items: {type: object}}
+        affected_resources: {type: array, items: {type: string}}
+        suggested_checks: {type: array, items: {type: string}}
+        first_seen_at: {type: string, format: date-time}
+        last_seen_at: {type: string, format: date-time}
+        occurrence_count: {type: integer}
+    Overview:
+      type: object
+      properties:
+        cluster_name: {type: string}
+        scenario_id: {type: string}
+        data_mode: {type: string, description: "fixture, live or live_emulated"}
+        fleet_health_status: {type: string}
+        fleet_health_headline: {type: string}
+        active_incident_counts: {type: object, additionalProperties: {type: integer}}
+        active_incidents: {type: array, items: {$ref: "#/components/schemas/Incident"}}
+        capacity_summary: {type: object}
+        sources: {type: array, items: {type: object}}
+    LiveStatus:
+      type: object
+      properties:
+        runtime: {type: string, enum: [go, python]}
+        version: {type: string}
+        supported: {type: boolean}
+        state: {type: string, enum: [idle, running]}
+        tick: {type: integer}
+        interval_seconds: {type: number}
+        last_tick_at: {type: [string, "null"], format: date-time}
+        config_mutable: {type: boolean}
+        config_mutable_reason: {type: string}
+        hostname: {type: string}
+        emulated: {type: boolean, description: At least one connected source is the Live Lab emulator}
+        role: {type: string, enum: [admin, viewer]}
+        auth_enabled: {type: boolean}
+        user: {type: string}
+        can_operate: {type: boolean}
+    LiveState:
+      type: object
+      description: Full live payload. GPU, pod and history objects are documented in internal/live/types.go.
+      properties:
+        status: {$ref: "#/components/schemas/LiveStatus"}
+        config: {type: object, description: Effective live configuration. Tokens are never returned (token_set flags only).}
+        overview: {oneOf: [{$ref: "#/components/schemas/Overview"}, {type: "null"}]}
+        preflight:
+          type: object
+          properties:
+            verdict: {type: string, enum: [idle, checking, blocked, degraded, ready]}
+            verdict_text: {type: string}
+            groups: {type: array, items: {type: object}}
+        sources: {type: array, items: {type: object}}
+        gpus:
+          type: array
+          items:
+            type: object
+            properties:
+              uuid: {type: string}
+              model_name: {type: string}
+              node_name: {type: string}
+              latest: {type: object}
+              sources: {type: array, items: {type: string, enum: [nvidia_smi, amd_smi, dcgm_exporter, prometheus]}}
+              exported_metrics: {type: array, items: {type: string}, description: Metrics at least one source publishes for this GPU}
+        history: {type: object}
+        activity: {type: array, items: {type: object}}
+        resolved_incidents: {type: array, items: {type: object}}
+        thresholds: {type: object, additionalProperties: {type: number}}
+        threshold_overrides: {type: array, items: {type: string}}
+        alerts: {$ref: "#/components/schemas/AlertStatus"}
+        persistence:
+          type: object
+          properties:
+            enabled: {type: boolean}
+            path: {type: string}
+            loaded_at: {type: [string, "null"], format: date-time}
+            saved_at: {type: [string, "null"], format: date-time}
+            last_error: {type: string}
+    ConfigPatch:
+      type: object
+      additionalProperties: false
+      properties:
+        cluster_name: {type: string}
+        interval_seconds: {type: number}
+        nvidia_smi_enabled: {type: boolean}
+        amd_smi_enabled: {type: boolean}
+        host_vitals_enabled: {type: boolean}
+        dcgm_exporter: {$ref: "#/components/schemas/SourcePatch"}
+        prometheus: {$ref: "#/components/schemas/SourcePatch"}
+        kubernetes: {$ref: "#/components/schemas/SourcePatch"}
+    SourcePatch:
+      type: object
+      additionalProperties: false
+      properties:
+        enabled: {type: boolean}
+        endpoint: {type: string, description: Empty string returns to probing the default local address}
+        bearer_token: {type: string, writeOnly: true}
+        clear_token: {type: boolean}
+    AlertStatus:
+      type: object
+      properties:
+        enabled: {type: boolean}
+        min_severity: {type: string, enum: [info, warning, critical]}
+        public_url: {type: string}
+        tracked_incidents: {type: integer}
+        note: {type: string}
+        destinations:
+          type: array
+          items:
+            type: object
+            properties:
+              kind: {type: string, enum: [slack, webhook]}
+              target: {type: string, description: Scheme and host only; the path (a credential for Slack) is never shown}
+              signed: {type: boolean}
+              sent: {type: integer}
+              failed: {type: integer}
+              dropped: {type: integer}
+              last_event: {type: string}
+              last_attempt_at: {type: [string, "null"], format: date-time}
+              last_success_at: {type: [string, "null"], format: date-time}
+              last_error: {type: string}
+    AlertEvent:
+      type: object
+      description: Body POSTed to the generic webhook (schema gpulens.alert/v1). Signed with X-GPULens-Signature-256 when a secret is set.
+      properties:
+        schema: {type: string, const: gpulens.alert/v1}
+        type: {type: string, enum: [incident.opened, incident.resolved, incident.severity_changed, test]}
+        delivery_id: {type: string}
+        timestamp: {type: string, format: date-time}
+        cluster: {type: string}
+        data_mode: {type: string}
+        emulated: {type: boolean}
+        incident: {type: object}
+        previous_severity: {type: string}
+        duration_seconds: {type: number}
+        console_url: {type: string}
+        message: {type: string}
+        gpulens_version: {type: string}
+    AuditEntry:
+      type: object
+      properties:
+        seq: {type: integer}
+        t: {type: string, format: date-time}
+        actor: {type: string, description: Basic-auth user, or "anonymous" when authentication is off}
+        role: {type: string, enum: [admin, viewer]}
+        remote: {type: string}
+        action: {type: string, enum: [live.start, live.stop, live.recheck, live.config, live.thresholds, alerts.test, simulation.scenario.select]}
+        detail: {type: string, description: What changed. Secrets are never recorded.}
+        outcome: {type: string, enum: [ok, denied, error]}
+    Summary:
+      type: object
+      properties:
+        schema: {type: string, const: gpulens.summary/v1}
+        cluster: {type: string}
+        hostname: {type: string}
+        version: {type: string}
+        runtime: {type: string}
+        state: {type: string}
+        verdict: {type: string}
+        verdict_text: {type: string}
+        data_mode: {type: string}
+        emulated: {type: boolean}
+        gpus_total: {type: integer}
+        gpus_fresh: {type: integer}
+        nodes: {type: integer}
+        incidents: {type: object, additionalProperties: {type: integer}}
+        top_incidents: {type: array, items: {type: string}}
+        sources_connected: {type: integer}
+        sources_enabled: {type: integer}
+        last_cycle_at: {type: [string, "null"], format: date-time}
+        generated_at: {type: string, format: date-time}
+    FleetView:
+      type: object
+      properties:
+        enabled: {type: boolean}
+        interval_seconds: {type: number}
+        note: {type: string}
+        totals: {type: object, additionalProperties: {type: integer}}
+        members:
+          type: array
+          items:
+            type: object
+            properties:
+              name: {type: string}
+              kind: {type: string, enum: [local, peer]}
+              url: {type: string, description: Credentials are redacted}
+              reachable: {type: boolean}
+              error: {type: string}
+              last_ok_at: {type: [string, "null"], format: date-time}
+              latency_ms: {type: number}
+              summary: {oneOf: [{$ref: "#/components/schemas/Summary"}, {type: "null"}]}
