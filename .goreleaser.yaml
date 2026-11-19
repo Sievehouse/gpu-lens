@@ -1,0 +1,52 @@
+# GoReleaser configuration: `goreleaser release --snapshot --clean` builds everything locally without publishing.
+version: 2
+project_name: gpu-lens
+
+builds:
+  - id: gpulens
+    main: ./cmd/gpulens
+    binary: gpulens
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X github.com/Sievehouse/gpu-lens/internal/live.Version={{ .Version }}
+
+archives:
+  - id: default
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    # The binary serves the console from web/dist and the simulation from fixtures/, so ship both.
+    files:
+      - LICENSE
+      - README.md
+      - CHANGELOG.md
+      - SECURITY.md
+      - web/dist/**
+      - fixtures/**
+      - deploy/kubernetes/**
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  use: github
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^chore:"
+
+release:
+  github:
+    owner: Sievehouse
+    name: gpu-lens
+  footer: |
+    Container image: `docker pull ghcr.io/sievehouse/gpu-lens:{{ .Version }}` (linux/amd64, linux/arm64).
+    Run: `./gpulens -listen 127.0.0.1:8080 -static-dir web/dist -fixtures-dir fixtures` and open http://127.0.0.1:8080.
