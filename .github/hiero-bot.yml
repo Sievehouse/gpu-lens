@@ -1,0 +1,95 @@
+# Hydra Maintainer configuration for GPU Lens
+repo: "Sievehouse/gpu-lens"
+
+workflows:
+  # Contributor onboarding and issue assignment
+  onboarding:
+    enabled: true
+    check_human_contributors: true
+    welcome_first_time_only: true
+
+    # Do not require CLA signatures for /assign
+    require_signed_cla: false
+
+    minimum_account_age_days: 0
+    minimum_public_contributions: 0
+    max_concurrent_assignments: 3
+
+    auto_assign_mentor: false
+
+    welcome_message: |
+      Welcome to GPU Lens! Thank you for contributing.
+      Please read CONTRIBUTING.md before getting started.
+
+    onboarding_checklist:
+      - Read CONTRIBUTING.md
+      - Follow the project's contribution guidelines
+      - Include tests where appropriate
+
+  # Pull request quality gates and AI review remain disabled
+  pull_request:
+    enabled: false
+    reviewer_recommendation: false
+    ai_review:
+      enabled: false
+
+  # PR health scoring
+  # DCO is intentionally excluded from score_weights.
+  pr_health:
+    enabled: true
+    score_weights:
+      has_tests: 0.3125
+      has_linked_issue: 0.1875
+      has_description: 0.1875
+      review_count: 0.1875
+      small_diff: 0.125
+    comment_threshold: 60
+    label_healthy_above: 75
+
+  # Contributor eligibility and progression
+  progression:
+    enabled: true
+    recommend_issues_after_merge: true
+    recommendation_count: 3
+    celebrate_milestones: true
+
+    requirements_for_junior_committer:
+      min_merged_prs: 3
+      min_reviews_given: 2
+      min_months_active: 1
+
+    requirements_for_committer:
+      min_merged_prs: 15
+      min_reviews_given: 10
+      min_months_active: 6
+
+    requirements_for_maintainer:
+      min_merged_prs: 50
+      min_reviews_given: 30
+      min_months_active: 12
+
+  # Issue lifecycle management
+  issue_management:
+    enabled: true
+    stale_issue_days: 60
+    close_stale_after_days: 7
+    stale_label: "stale"
+
+    exempt_labels:
+      - pinned
+      - security
+      - in-progress
+
+    auto_unassign_inactive_days: 14
+
+    label_escalation_rules: []
+
+  # Automatic reviewer assignment on new non-draft PRs
+  reviewer_assignment:
+    enabled: true
+    availability_file: ".github/reviewers.yml"
+    reviewers_count: 1
+    strategy: round-robin
+    exclude_pr_author: true
+    fallback_to_all_if_none_available: true
+    notify_comment: "off"

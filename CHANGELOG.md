@@ -5,6 +5,10 @@ All notable changes to GPU Lens are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Hydra Maintainer configuration for optional contributor onboarding, issue management,
+  PR health scoring, contributor progression, and reviewer assignment.
+
 ## [0.3.0] - 2026-11-19
 
 ### Added
