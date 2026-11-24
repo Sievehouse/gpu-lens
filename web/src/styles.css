@@ -1121,3 +1121,9 @@ html[data-theme="light"] .disclaimer-box, html[data-theme="light"] .blindspot-bo
 html[data-theme="light"] .lv-stat.warning .lv-stat-value { color: var(--text-primary); }
 /* Meters are ink when healthy; colour appears only when something needs attention */
 .lv-meter-fill, .lv-meter-fill.healthy { background: var(--text-secondary); }
+
+/* Brand mark: the GPU Lens logo tile replaces the "GL" letters, which stay in the markup */
+.brand-logo, .brand-logo.live {
+  background: url("/favicon.svg") center / contain no-repeat; color: transparent; font-size: 0; border-radius: 0;
+  width: 42px; height: 42px;
+}
