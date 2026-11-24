@@ -15,6 +15,6 @@
     "verify": "node scripts/build_offline.js --verify-only"
   },
   "devDependencies": {
-    "typescript": "^5.5.3"
+    "typescript": "^7.0.2"
   }
 }
