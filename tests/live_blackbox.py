@@ -267,7 +267,7 @@ def scenario_lab(kind):
 
 
 # ---------------------------------------------------------------------------------------------
-# 0.3 features: access control, audit, alerting, self-metrics, AMD, durable state, fleet
+# Operations features: access control, audit, alerting, self-metrics, AMD, durable state, fleet
 # ---------------------------------------------------------------------------------------------
 import base64
 import hashlib
