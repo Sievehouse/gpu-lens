@@ -104,7 +104,7 @@ func TestLifecycleSignatureAndDedupe(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer n.Close()
-	meta := Meta{Cluster: "prod-a", DataMode: "live", Version: "0.3.0"}
+	meta := Meta{Cluster: "prod-a", DataMode: "live", Version: "0.1.0"}
 
 	n.Sync([]domain.Incident{inc("a", domain.SeverityWarning), inc("low", domain.SeverityInfo)}, meta, true)
 	waitFor(t, func() bool { return len(rec.events(t)) == 1 })
