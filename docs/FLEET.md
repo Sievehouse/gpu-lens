@@ -43,7 +43,7 @@ No tokens, pod names beyond the incident titles, or raw telemetry leave the memb
 | :-- | :-- |
 | Green edge | Reachable, no warning or critical incidents |
 | Amber / red edge | Warning / critical incidents are open on that member |
-| Grey edge, **unreachable** | The hub could not get a summary: the error says why (timeout, connection refused, `401` = needs credentials, `404` = older GPU Lens or live console disabled). Never shown as healthy. |
+| Grey edge, **unreachable** | The hub could not get a summary: the error says why (timeout, connection refused, `401` = needs credentials, `404` = an older GPU Lens without the fleet API, or live console disabled). Never shown as healthy. |
 | "No GPU telemetry on this member" | It answered, but nothing is reporting GPUs. Not the same as healthy. |
 
 Totals at the top add up the reachable members; **Need attention** counts unreachable, blocked or critical members.
