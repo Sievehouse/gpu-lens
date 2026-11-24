@@ -49,7 +49,7 @@ Those are the addresses GPU Lens probes by default, so no configuration is neede
 
 Other settings: `--live-interval` / `GPULENS_LIVE_INTERVAL_SECONDS` (1–300), `--live-idle-timeout` / `GPULENS_LIVE_IDLE_TIMEOUT_SECONDS` (default 900 s without a viewer; 0 with `--mode live`), `--cluster-name`, `--mode live` (start collecting at boot, no browser needed), `--no-live` (demo only), `--live-allow-remote-config`.
 
-### Access control, audit, alerting, durable state, fleet (0.3)
+### Access control, audit, alerting, durable state, fleet
 
 | Setting | Flag | Environment variable |
 | :-- | :-- | :-- |
