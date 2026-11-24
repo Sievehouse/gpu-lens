@@ -53,7 +53,7 @@ GPU Lens POSTs this JSON body (schema `gpulens.alert/v1`):
     "affected_resources": ["node/gpu-node-02", "gpu/GPU-…"], "first_seen_at": "2026-11-19T15:42:58Z"
   },
   "console_url": "https://gpulens.example.com/?live_tab=incidents",
-  "gpulens_version": "0.3.0"
+  "gpulens_version": "0.1.0"
 }
 ```
 
