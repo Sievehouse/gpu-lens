@@ -16,8 +16,8 @@ import (
 )
 
 // Version is the GPU Lens release reported by the live API, /metrics and -version. Release builds set it from the
-// git tag: go build -ldflags "-X github.com/Sievehouse/gpu-lens/internal/live.Version=v0.3.0".
-var Version = "0.3.0-dev"
+// git tag: go build -ldflags "-X github.com/Sievehouse/gpu-lens/internal/live.Version=v0.1.0".
+var Version = "0.1.0"
 
 // Source identifiers used across the live API.
 const (
