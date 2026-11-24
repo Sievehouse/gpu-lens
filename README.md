@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/brand/gpulens-logo-dark.svg">
+    <img src="docs/brand/gpulens-logo.svg" alt="GPU Lens" height="72">
+  </picture>
+</p>
+
 # GPU Lens — Open-Source GPU Fleet Reliability and Capacity Intelligence Platform
 
 [![CI](https://github.com/Sievehouse/gpu-lens/actions/workflows/ci.yml/badge.svg)](https://github.com/Sievehouse/gpu-lens/actions/workflows/ci.yml)
