@@ -2097,6 +2097,7 @@ exports.Empty = Empty;
 exports.LineChart = LineChart;
 exports.Sparkline = Sparkline;
 exports.Heatmap = Heatmap;
+exports.heatColor = heatColor;
 const jsx_runtime_1 = require("../jsx-runtime");
 // ---------- formatting ----------
 function num(v, digits = 0, unit = '') {
@@ -2302,9 +2303,7 @@ function Heatmap(props) {
         if (v === undefined || v === null)
             return '#1b2436';
         const f = Math.max(0, Math.min(1, v / props.max));
-        // blue → amber → red
-        const hue = 210 - f * 210;
-        return `hsl(${hue.toFixed(0)}, 70%, ${(22 + f * 28).toFixed(0)}%)`;
+        return heatColor(f);
     };
     return ((0, jsx_runtime_1.h)("div", { className: "lv-heat-wrap" },
         (0, jsx_runtime_1.h)("div", { className: "lv-heat-labels", style: { height: `${H}px` } }, props.rows.map((r) => ((0, jsx_runtime_1.h)("div", { style: { height: `${rh}px` } }, r.label)))),
@@ -2312,6 +2311,26 @@ function Heatmap(props) {
             const v = p.g[r.id] ? p.g[r.id][props.idx] : undefined;
             return (0, jsx_runtime_1.h)("rect", { x: ci * cw, y: ri * rh + 2, width: cw + 0.4, height: rh - 2, fill: color(v) });
         })))));
+}
+// Heat-map ramp in the GPU Lens palette: deep green (idle) → green → yellow → orange → coral (saturated).
+const HEAT_STOPS = [
+    [0, [31, 61, 51]],
+    [0.35, [99, 199, 165]],
+    [0.65, [242, 201, 76]],
+    [0.85, [240, 137, 60]],
+    [1, [239, 106, 91]],
+];
+function heatColor(f) {
+    for (let i = 1; i < HEAT_STOPS.length; i++) {
+        const [p1, c1] = HEAT_STOPS[i];
+        const [p0, c0] = HEAT_STOPS[i - 1];
+        if (f <= p1) {
+            const t = (f - p0) / (p1 - p0 || 1);
+            const c = c0.map((v, k) => Math.round(v + (c1[k] - v) * t));
+            return `rgb(${c[0]}, ${c[1]}, ${c[2]})`;
+        }
+    }
+    return 'rgb(239, 106, 91)';
 }
 
   };
@@ -2327,7 +2346,9 @@ exports.renderHost = renderHost;
 // Command center, preflight, GPU and host views of the live console.
 const jsx_runtime_1 = require("../jsx-runtime");
 const ui_1 = require("./ui");
-const C = { blue: '#38bdf8', indigo: '#818cf8', green: '#10b981', amber: '#f59e0b', red: '#ef4444', purple: '#a855f7', slate: '#94a3b8' };
+// Chart palette (ink theme values; styles.css re-tunes them for the paper theme). Names are kept for readability:
+// blue = signature green, indigo = yellow, green = sky.
+const C = { blue: '#63c7a5', indigo: '#f2c94c', green: '#8ab9dc', amber: '#f0893c', red: '#ef6a5b', purple: '#b9a3ec', slate: '#85806f' };
 function sevKind(s) {
     return s === 'critical' ? 'critical' : s === 'warning' ? 'warning' : s === 'inconclusive' ? 'inconclusive' : 'healthy';
 }
@@ -2418,7 +2439,7 @@ function renderCommandCenter(L, s, go, openSimulation) {
         (0, jsx_runtime_1.h)("div", { className: "panel" },
             (0, jsx_runtime_1.h)("div", { className: "panel-header" },
                 (0, jsx_runtime_1.h)("div", { className: "panel-title" }, "Per-GPU utilization heat map"),
-                (0, jsx_runtime_1.h)("span", { className: "lv-note" }, "one row per GPU \u00B7 blue = idle \u2192 red = saturated")),
+                (0, jsx_runtime_1.h)("span", { className: "lv-note" }, "one row per GPU \u00B7 green = idle \u2192 yellow \u2192 red = saturated")),
             (0, jsx_runtime_1.h)(ui_1.Heatmap, { rows: gpus.map((g) => ({ id: g.uuid, label: `${g.node_name.length > 18 ? '…' + g.node_name.slice(-17) : g.node_name}/gpu${g.device_index}` })), points: pts, idx: 0, max: 100 })),
         (0, jsx_runtime_1.h)("div", { className: "lv-grid-2" },
             (0, jsx_runtime_1.h)("div", { className: "panel" },
@@ -3368,7 +3389,10 @@ exports.applyTheme = applyTheme;
 exports.currentTheme = currentTheme;
 exports.initTheme = initTheme;
 exports.mountThemeToggle = mountThemeToggle;
-const KEY = 'gpulens-theme';
+// A new key, so every visitor first sees the paper (day) theme once; after that their own choice sticks.
+const KEY = 'gpulens-theme-v3';
+const SUN = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2.5v2.2M12 19.3v2.2M4.6 4.6l1.6 1.6M17.8 17.8l1.6 1.6M2.5 12h2.2M19.3 12h2.2M4.6 19.4l1.6-1.6M17.8 6.2l1.6-1.6"/></svg>';
+const MOON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.5 14.2A8.5 8.5 0 1 1 9.8 3.5a6.8 6.8 0 0 0 10.7 10.7z"/></svg>';
 function read() {
     try {
         const v = window.localStorage.getItem(KEY);
@@ -3382,37 +3406,51 @@ function read() {
 }
 function applyTheme(t) {
     document.documentElement.setAttribute('data-theme', t);
-    const btn = document.getElementById('theme-toggle');
-    if (btn) {
-        btn.textContent = t === 'light' ? '☾ Dark mode' : '☀ Light mode';
-        btn.setAttribute('aria-label', t === 'light' ? 'Switch to dark mode' : 'Switch to light mode');
+    const group = document.getElementById('theme-toggle');
+    if (group) {
+        group.querySelectorAll('button').forEach((b) => {
+            b.setAttribute('aria-pressed', b.getAttribute('data-theme-value') === t ? 'true' : 'false');
+        });
     }
 }
 function currentTheme() {
-    return document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
+    return document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
 }
 function initTheme() {
     applyTheme(read());
 }
-/** A small fixed button, plain DOM outside the app root. */
+function choose(t) {
+    try {
+        window.localStorage.setItem(KEY, t);
+    }
+    catch {
+        /* ignore */
+    }
+    applyTheme(t);
+}
+/** A small sun | moon switch, plain DOM outside the app root. */
 function mountThemeToggle() {
     if (document.getElementById('theme-toggle'))
         return;
-    const btn = document.createElement('button');
-    btn.id = 'theme-toggle';
-    btn.type = 'button';
-    btn.className = 'theme-toggle';
-    btn.addEventListener('click', () => {
-        const next = currentTheme() === 'light' ? 'dark' : 'light';
-        try {
-            window.localStorage.setItem(KEY, next);
-        }
-        catch {
-            /* ignore */
-        }
-        applyTheme(next);
-    });
-    document.body.appendChild(btn);
+    const group = document.createElement('div');
+    group.id = 'theme-toggle';
+    group.className = 'theme-toggle';
+    group.setAttribute('role', 'group');
+    group.setAttribute('aria-label', 'Colour theme');
+    for (const [value, label, icon] of [
+        ['light', 'Paper (light) theme', SUN],
+        ['dark', 'Ink (dark) theme', MOON],
+    ]) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.title = label;
+        b.setAttribute('aria-label', label);
+        b.setAttribute('data-theme-value', value);
+        b.innerHTML = icon;
+        b.addEventListener('click', () => choose(value));
+        group.appendChild(b);
+    }
+    document.body.appendChild(group);
     applyTheme(currentTheme());
 }
 
