@@ -3,7 +3,7 @@
 What is coming next, roughly in order. Every item keeps GPU Lens's ground rules: read-only, deterministic, and
 missing data is never healthy. Want to help with one? Comment on the matching issue or open one.
 
-## Now: real-hardware validation (0.3.x)
+## Now: real-hardware validation (0.1.x)
 
 * **Reports from real machines** — multi-GPU NVIDIA servers, DCGM exporter on Kubernetes, kube-prometheus-stack.
   Fix whatever field-level surprises they reveal.
@@ -11,7 +11,7 @@ missing data is never healthy. Want to help with one? Comment on the matching is
   temperature sensor choice and power fields.
 * **Prometheus parity in the Python runtime** — history backfill, scrape-target audit and clock-skew check.
 
-## Next: bigger fleets (0.4)
+## Next: bigger fleets (0.2)
 
 * **Merged multi-cluster evaluation** — today the Fleet tab aggregates each member's health; next, a hub that can
   drill into a member's incidents and GPUs without leaving the page.
@@ -20,7 +20,7 @@ missing data is never healthy. Want to help with one? Comment on the matching is
 * **Alert routing** — per-severity and per-cluster destinations, quiet hours, and a digest mode.
 * **OIDC sign-in** — native single sign-on in addition to basic auth and the reverse-proxy pattern.
 
-## Later: richer hardware models (0.5+)
+## Later: richer hardware models (0.3+)
 
 * **MIG-aware capacity** — model Multi-Instance GPU profiles and slice geometry in the capacity math.
 * **Kubernetes DRA** — understand `ResourceClaim` allocations alongside `nvidia.com/gpu`.
