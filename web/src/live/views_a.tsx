@@ -7,7 +7,9 @@ import {
   ago, bytesPerSec, clock, duration, mib, num, tone,
 } from './ui';
 
-const C = { blue: '#38bdf8', indigo: '#818cf8', green: '#10b981', amber: '#f59e0b', red: '#ef4444', purple: '#a855f7', slate: '#94a3b8' };
+// Chart palette (ink theme values; styles.css re-tunes them for the paper theme). Names are kept for readability:
+// blue = signature green, indigo = yellow, green = sky.
+const C = { blue: '#63c7a5', indigo: '#f2c94c', green: '#8ab9dc', amber: '#f0893c', red: '#ef6a5b', purple: '#b9a3ec', slate: '#85806f' };
 
 function sevKind(s: string): string {
   return s === 'critical' ? 'critical' : s === 'warning' ? 'warning' : s === 'inconclusive' ? 'inconclusive' : 'healthy';
@@ -106,7 +108,7 @@ export function renderCommandCenter(L: LiveStore, s: LiveState, go: (tab: string
       <div className="panel">
         <div className="panel-header">
           <div className="panel-title">Per-GPU utilization heat map</div>
-          <span className="lv-note">one row per GPU · blue = idle → red = saturated</span>
+          <span className="lv-note">one row per GPU · green = idle → yellow → red = saturated</span>
         </div>
         <Heatmap rows={gpus.map((g) => ({ id: g.uuid, label: `${g.node_name.length > 18 ? '…' + g.node_name.slice(-17) : g.node_name}/gpu${g.device_index}` }))} points={pts} idx={0} max={100} />
       </div>
