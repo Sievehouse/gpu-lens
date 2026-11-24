@@ -1952,6 +1952,12 @@ def make_handler(state: GPULensAppState, live_api=None, extras=None, fleet=None)
                     ctype = "application/javascript; charset=utf-8"
                 elif target.endswith(".css"):
                     ctype = "text/css; charset=utf-8"
+                elif target.endswith(".svg"):
+                    ctype = "image/svg+xml"
+                elif target.endswith(".png"):
+                    ctype = "image/png"
+                elif target.endswith(".ico"):
+                    ctype = "image/x-icon"
                 with open(target, "rb") as f:
                     data = f.read()
                 self.send_response(200)
