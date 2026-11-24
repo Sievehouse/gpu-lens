@@ -22,7 +22,7 @@ export interface LiveStatus {
   auto_start: boolean;
   hostname: string;
   emulated: boolean;
-  // Access control (0.3+). Without authentication every caller is "admin".
+  // Access control. Without authentication every caller is "admin".
   role?: 'admin' | 'viewer';
   auth_enabled?: boolean;
   user?: string;
