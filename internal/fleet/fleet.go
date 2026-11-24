@@ -236,7 +236,7 @@ func (h *Hub) fetch(ctx context.Context, p Peer) (*live.Summary, error) {
 	case resp.StatusCode == http.StatusUnauthorized:
 		return nil, errors.New("HTTP 401: the peer requires credentials (put user:password in the peer URL)")
 	case resp.StatusCode == http.StatusNotFound:
-		return nil, errors.New("HTTP 404: the peer is not GPU Lens 0.3+ or its live console is disabled")
+		return nil, errors.New("HTTP 404: the peer is an older GPU Lens without the fleet API, or its live console is disabled")
 	case resp.StatusCode != http.StatusOK:
 		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
