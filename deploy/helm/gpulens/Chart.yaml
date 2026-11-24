@@ -2,8 +2,8 @@ apiVersion: v2
 name: gpulens
 description: Read-only GPU fleet reliability and capacity console (NVIDIA and AMD) with deterministic, evidence-backed incidents.
 type: application
-version: 0.3.0
-appVersion: "0.3.0"
+version: 0.1.0
+appVersion: "0.1.0"
 home: https://github.com/Sievehouse/gpu-lens
 sources:
   - https://github.com/Sievehouse/gpu-lens
