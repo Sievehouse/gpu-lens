@@ -27,7 +27,7 @@ import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
-VERSION = "0.3.0-dev"
+VERSION = "0.1.0"
 RUNTIME = "python"
 
 SOURCE_HOST, SOURCE_SMI, SOURCE_DCGM, SOURCE_PROM, SOURCE_K8S = "host", "nvidia_smi", "dcgm_exporter", "prometheus", "kubernetes"
@@ -4009,7 +4009,7 @@ class FleetHub:
                 err, summary = "the response is not a GPU Lens summary", None
         except HTTPStatus as e:
             err = {401: "HTTP 401: the peer requires credentials (put user:password in the peer URL)",
-                   404: "HTTP 404: the peer is not GPU Lens 0.3+ or its live console is disabled"}.get(e.status, f"HTTP {e.status}")
+                   404: "HTTP 404: the peer is an older GPU Lens without the fleet API, or its live console is disabled"}.get(e.status, f"HTTP {e.status}")
         except ValueError:
             err = "the response is not a GPU Lens summary"
         except Exception as e:
