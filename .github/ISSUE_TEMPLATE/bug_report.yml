@@ -28,7 +28,7 @@ body:
     attributes:
       label: GPU Lens version and runtime
       description: Shown in the console's top bar, or `gpulens -version`.
-      placeholder: go v0.3.0 / python v0.3.0
+      placeholder: go v0.1.0 / python v0.1.0
     validations:
       required: true
   - type: dropdown
