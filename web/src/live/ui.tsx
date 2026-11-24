@@ -280,9 +280,7 @@ export function Heatmap(props: {
   const color = (v: number | undefined) => {
     if (v === undefined || v === null) return '#1b2436';
     const f = Math.max(0, Math.min(1, v / props.max));
-    // blue → amber → red
-    const hue = 210 - f * 210;
-    return `hsl(${hue.toFixed(0)}, 70%, ${(22 + f * 28).toFixed(0)}%)`;
+    return heatColor(f);
   };
   return (
     <div className="lv-heat-wrap">
@@ -301,4 +299,26 @@ export function Heatmap(props: {
       </svg>
     </div>
   );
+}
+
+// Heat-map ramp in the GPU Lens palette: deep green (idle) → green → yellow → orange → coral (saturated).
+const HEAT_STOPS: [number, [number, number, number]][] = [
+  [0, [31, 61, 51]],
+  [0.35, [99, 199, 165]],
+  [0.65, [242, 201, 76]],
+  [0.85, [240, 137, 60]],
+  [1, [239, 106, 91]],
+];
+
+export function heatColor(f: number): string {
+  for (let i = 1; i < HEAT_STOPS.length; i++) {
+    const [p1, c1] = HEAT_STOPS[i];
+    const [p0, c0] = HEAT_STOPS[i - 1];
+    if (f <= p1) {
+      const t = (f - p0) / (p1 - p0 || 1);
+      const c = c0.map((v, k) => Math.round(v + (c1[k] - v) * t));
+      return `rgb(${c[0]}, ${c[1]}, ${c[2]})`;
+    }
+  }
+  return 'rgb(239, 106, 91)';
 }
