@@ -1,6 +1,6 @@
 name: Release
 
-# Push a tag like v0.3.0 to publish binaries (Linux, macOS, Windows; amd64 and arm64) with checksums.
+# Push a tag like v0.1.0 to publish binaries (Linux, macOS, Windows; amd64 and arm64) with checksums.
 # The container image for the same tag is published by container.yml.
 on:
   push:
@@ -21,10 +21,23 @@ jobs:
         with:
           go-version: stable
 
+      # Release notes come from the matching CHANGELOG.md section, not from the commit list.
+      - name: Extract release notes from CHANGELOG.md
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          awk -v v="$VERSION" '
+            $0 ~ "^## \\[" v "\\]" { on = 1; next }
+            on && /^## \[/ { exit }
+            on && /^\[[^]]+\]: / { exit }
+            on { print }
+          ' CHANGELOG.md > "$RUNNER_TEMP/RELEASE_NOTES.md"
+          test -s "$RUNNER_TEMP/RELEASE_NOTES.md" || echo "See CHANGELOG.md." > "$RUNNER_TEMP/RELEASE_NOTES.md"
+          cat "$RUNNER_TEMP/RELEASE_NOTES.md"
+
       - uses: goreleaser/goreleaser-action@v6
         with:
           distribution: goreleaser
           version: "~> v2"
-          args: release --clean
+          args: release --clean --release-notes=${{ runner.temp }}/RELEASE_NOTES.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
