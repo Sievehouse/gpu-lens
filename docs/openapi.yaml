@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: GPU Lens API
-  version: 0.3.0
+  version: 0.1.0
   summary: Read-only GPU fleet reliability and capacity console.
   description: |
     The same API is served by the Go binary (`cmd/gpulens`) and the Python runtime (`scripts/local_runtime_server.py`).
@@ -61,7 +61,7 @@ paths:
             text/plain:
               schema: {type: string}
               example: |
-                gpulens_build_info{goversion="go1.24.7",runtime="go",version="0.3.0"} 1
+                gpulens_build_info{goversion="go1.24.7",runtime="go",version="0.1.0"} 1
                 gpulens_live_running 1
                 gpulens_live_source_up{source="dcgm_exporter",state="connected"} 1
                 gpulens_live_incidents_open{severity="critical"} 0
