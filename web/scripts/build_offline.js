@@ -196,6 +196,14 @@ function buildOnce(compiler) {
     fs.writeFileSync(path.join(distDir, css), content);
     hashes[css] = shortHash(content);
   }
+  // Static assets (favicons, logo) in web/public are copied as they are.
+  const publicDir = path.join(webRoot, 'public');
+  if (fs.existsSync(publicDir)) {
+    for (const name of fs.readdirSync(publicDir).sort()) {
+      const src = path.join(publicDir, name);
+      if (fs.statSync(src).isFile()) fs.copyFileSync(src, path.join(distDir, name));
+    }
+  }
   let html = fs.readFileSync(path.join(webRoot, 'index.html'), 'utf8');
   for (const [name, hash] of Object.entries(hashes)) {
     html = html.split(`"/${name}"`).join(`"/${name}?v=${hash}"`);
